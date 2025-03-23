@@ -4,7 +4,7 @@
 sudo modprobe nbd
 
 # Connect the qcow2 image to /dev/nbd0
-sudo qemu-nbd -c /dev/nbd0 -f qcow2 /mnt/android/Pixel-9-AVF-Debian/android.qcow2
+sudo qemu-nbd -c /dev/nbd0 -f qcow2 /home/droid/P9Debian/android.qcow2
 
 # Wait for the device to appear
 sleep 2  # wait for the device to be ready
