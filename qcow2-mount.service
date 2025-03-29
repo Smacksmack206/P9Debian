@@ -1,0 +1,11 @@
+[Unit]
+Description=Mount qcow2 image
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/init.d/mount_qcow2.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
