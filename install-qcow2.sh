@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Update and install dependencies
-sudo apt update && sudo apt install -y qemu-utils util-linux
+sudo apt update && sudo apt install -y qemu-system-gui nbd-client lvm2 util-linux
 
 # Load nbd kernel module
 sudo modprobe nbd
