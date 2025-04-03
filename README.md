@@ -11,7 +11,7 @@
 
 **Problem:** Google introduced a basic Debian terminal for developers via AVF in Android 16 Beta 3. While promising, it's heavily restricted, lacks documentation, suffers from severe storage limitations, and misses essential features for practical use.
 
-**Solution:** Project Terminus overcomes these limitations through deep system analysis, reverse engineering, and advanced Linux techniques, providing a truly usable Linux environment on your Android device.
+**Solution:** AVF Pro / AVF+ (Android Virtualization Framework Pro) overcomes these limitations through deep system analysis, reverse engineering, and advanced Linux techniques, providing a truly usable Linux environment on your Android device.
 
 ---
 
@@ -69,7 +69,7 @@ The standard AVF terminal, while a step forward, felt like a locked room. I want
 
 Manually replicating this environment is highly complex due to the lack of official documentation, the need for specific versions of tools, and the intricate nature of the storage and automation setup.
 
-**To provide a streamlined, reliable, and easy-to-use experience, Project Terminus is available as [Your App Name], a dedicated Android application.**
+**To provide a streamlined, reliable, and easy-to-use experience, AVF Pro / AVF+ (Android Virtualization Framework Pro) is available as [Your App Name], a dedicated Android application.**
 
 **AVF Pro / AVF+ (Android Virtualization Framework Pro)** handles the complex setup, provides the necessary pre-configured components, and manages the environment for you.
 
@@ -88,7 +88,7 @@ Manually replicating this environment is highly complex due to the lack of offic
 
 The underlying components (Android Virtualization Framework, Linux kernel, Debian, `crosvm`, `qemu`, LVM, etc.) are governed by their respective open-source licenses.
 
-The specific integration methods, advanced automation scripts, and the streamlined setup process developed for **Project Terminus** are proprietary and distributed through the **[Your App Name]** application / associated project website.
+The specific integration methods, advanced automation scripts, and the streamlined setup process developed for **AVF Pro / AVF+ (Android Virtualization Framework Pro)** are proprietary and distributed through the **[Your App Name]** application / associated project website.
 
 ---
 
