@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSH & VNC Cloud Configuration Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script> <!-- Example, consider SVG icons -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc; /* slate-50 */
+        }
+        .btn {
+            @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2;
+        }
+        .btn-primary {
+            @apply bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
+        }
+        .btn-secondary {
+             @apply bg-slate-600 hover:bg-slate-700 focus:ring-slate-500;
+        }
+        .btn-danger {
+            @apply bg-red-600 hover:bg-red-700 focus:ring-red-500;
+        }
+        .input-field {
+            @apply mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500;
+        }
+        .card {
+            @apply bg-white shadow-lg rounded-xl p-6 md:p-8;
+        }
+        .modal-overlay {
+            @apply fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 transition-opacity duration-300;
+        }
+        .modal-content {
+            @apply bg-white rounded-lg shadow-xl p-6 w-11/12 max-w-2xl transform transition-transform duration-300 scale-95;
+        }
+        /* For showing/hiding elements */
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class="text-slate-800">
+
+    <div id="app" class="container mx-auto p-4 md:p-8 max-w-4xl">
+
+        <!-- Header and Auth Section -->
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-2xl md:text-3xl font-bold text-slate-900">SSH & VNC Cloud Manager</h1>
+            <div id="auth-container">
+                <button id="login-btn" class="btn btn-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-3a2 2 0 11-4 0 2 2 0 014 0zm-2 4a5 5 0 00-4.546 2.916A5.986 5.986 0 0010 16a5.986 5.986 0 004.546-2.084A5 5 0 0012 11z" clip-rule="evenodd" /></svg>
+                    Sign In with Google
+                </button>
+                <div id="user-info" class="hidden items-center">
+                    <span id="user-name" class="text-sm font-medium mr-4"></span>
+                    <button id="logout-btn" class="btn btn-secondary">Logout</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content - Hidden until logged in -->
+        <main id="main-content" class="hidden">
+            <div class="card space-y-6">
+                <!-- Configuration Management -->
+                <div>
+                    <h2 class="text-xl font-semibold mb-3">Configurations</h2>
+                    <div class="flex flex-col sm:flex-row gap-4">
+                        <select id="configs-dropdown" class="input-field flex-grow"></select>
+                        <button id="load-config-btn" class="btn btn-primary">Load</button>
+                        <button id="save-config-btn" class="btn btn-secondary">Save New</button>
+                         <button id="delete-config-btn" class="btn btn-danger">Delete</button>
+                    </div>
+                </div>
+
+                <hr class="border-slate-200">
+
+                <!-- Connection Setup Form -->
+                <div>
+                    <h2 class="text-xl font-semibold mb-4">Connection Details</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label for="config-name" class="block text-sm font-medium text-slate-700">Configuration Name</label>
+                            <input type="text" id="config-name" class="input-field" placeholder="e.g., Pixel 9 Pro (Home)">
+                        </div>
+                        <div>
+                            <label for="pixel-ip" class="block text-sm font-medium text-slate-700">Pixel (Debian) ZeroTier IP</label>
+                            <input type="text" id="pixel-ip" class="input-field" placeholder="e.g., 10.147.17.180">
+                        </div>
+                        <div>
+                            <label for="pixel-user" class="block text-sm font-medium text-slate-700">Username for Pixel</label>
+                            <input type="text" id="pixel-user" class="input-field" placeholder="e.g., debianuser">
+                        </div>
+                        <div>
+                            <label for="ssh-port" class="block text-sm font-medium text-slate-700">SSH Port</label>
+                            <input type="number" id="ssh-port" class="input-field" value="22">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SSH Key Management -->
+                <div>
+                    <h2 class="text-xl font-semibold mb-4">SSH Key</h2>
+                    <div class="space-y-4">
+                        <p class="text-sm text-slate-600">This app cannot access your local files. To find existing keys, please run this command in your Mac Terminal and paste the output below.</p>
+                        <div class="bg-slate-100 p-3 rounded-md font-mono text-sm">
+                            ls ~/.ssh/id_* | grep -v ".pub$"
+                            <button id="copy-ls-cmd" class="ml-4 text-slate-500 hover:text-indigo-600" title="Copy command">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" /><path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" /></svg>
+                            </button>
+                        </div>
+                        <textarea id="ssh-key-paths" class="input-field h-24" placeholder="Paste the output here... e.g.,&#10;/Users/yourname/.ssh/id_rsa&#10;/Users/yourname/.ssh/id_ed25519"></textarea>
+                        
+                        <div class="flex items-center gap-4">
+                           <select id="key-select-dropdown" class="input-field flex-grow">
+                                <option value="">-- Choose an existing key --</option>
+                           </select>
+                           <span class="text-slate-500">OR</span>
+                           <button id="generate-key-btn" class="btn btn-secondary">Generate New Key</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-4">
+                    <button id="generate-instructions-btn" class="w-full btn btn-primary text-base py-3">Generate Setup Instructions</button>
+                </div>
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Modal for Instructions -->
+    <div id="instructions-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div id="modal-body" class="space-y-6">
+                <!-- Content will be injected by JS -->
+            </div>
+            <div class="mt-6 text-right">
+                <button onclick="document.getElementById('instructions-modal').classList.add('hidden')" class="btn btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+        // --- Firebase Configuration ---
+        // IMPORTANT: These are placeholders. In a real environment, these would be populated.
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-ssh-vnc-manager';
+
+        // --- Firebase Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Initialization ---
+        let app, auth, db, provider;
+        let userId = null;
+
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            provider = new GoogleAuthProvider();
+        } catch (e) {
+            console.error("Firebase initialization failed:", e);
+            alert("Could not initialize Firebase. Please check your connection and configuration.");
+        }
+
+        // --- UI Elements ---
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const authContainer = document.getElementById('auth-container');
+        const userInfo = document.getElementById('user-info');
+        const userNameEl = document.getElementById('user-name');
+        const mainContent = document.getElementById('main-content');
+        
+        const configsDropdown = document.getElementById('configs-dropdown');
+        const loadConfigBtn = document.getElementById('load-config-btn');
+        const saveConfigBtn = document.getElementById('save-config-btn');
+        const deleteConfigBtn = document.getElementById('delete-config-btn');
+
+        const configNameInput = document.getElementById('config-name');
+        const pixelIpInput = document.getElementById('pixel-ip');
+        const pixelUserInput = document.getElementById('pixel-user');
+        const sshPortInput = document.getElementById('ssh-port');
+        
+        const copyLsCmdBtn = document.getElementById('copy-ls-cmd');
+        const sshKeyPathsTextarea = document.getElementById('ssh-key-paths');
+        const keySelectDropdown = document.getElementById('key-select-dropdown');
+        const generateKeyBtn = document.getElementById('generate-key-btn');
+        const generateInstructionsBtn = document.getElementById('generate-instructions-btn');
+
+        const modal = document.getElementById('instructions-modal');
+        const modalBody = document.getElementById('modal-body');
+
+        // --- Authentication Logic ---
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                userId = user.uid;
+                userNameEl.textContent = user.displayName || user.email;
+                loginBtn.classList.add('hidden');
+                userInfo.classList.remove('hidden');
+                mainContent.classList.remove('hidden');
+                loadUserConfigs();
+            } else {
+                userId = null;
+                loginBtn.classList.remove('hidden');
+                userInfo.classList.add('hidden');
+                mainContent.classList.add('hidden');
+            }
+        });
+
+        loginBtn.addEventListener('click', () => {
+            signInWithPopup(auth, provider).catch(error => console.error("Login failed:", error));
+        });
+
+        logoutBtn.addEventListener('click', () => {
+            signOut(auth).catch(error => console.error("Logout failed:", error));
+        });
+
+        // --- Configuration (Firestore) Logic ---
+        async function loadUserConfigs() {
+            if (!userId) return;
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/configs`, 'userConfigs');
+            const docSnap = await getDoc(docRef);
+
+            configsDropdown.innerHTML = '<option value="">-- Load a saved configuration --</option>';
+            if (docSnap.exists()) {
+                const configs = docSnap.data();
+                Object.keys(configs).forEach(name => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    configsDropdown.appendChild(option);
+                });
+            }
+        }
+
+        saveConfigBtn.addEventListener('click', async () => {
+            const configName = configNameInput.value.trim();
+            if (!userId || !configName) {
+                alert("Please sign in and provide a configuration name.");
+                return;
+            }
+            
+            const configData = {
+                ip: pixelIpInput.value,
+                user: pixelUserInput.value,
+                port: sshPortInput.value,
+                keyPath: keySelectDropdown.value
+            };
+
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/configs`, 'userConfigs');
+            await setDoc(docRef, { [configName]: configData }, { merge: true });
+            alert(`Configuration '${configName}' saved!`);
+            loadUserConfigs();
+        });
+
+        loadConfigBtn.addEventListener('click', async () => {
+            const configName = configsDropdown.value;
+            if (!userId || !configName) return;
+
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/configs`, 'userConfigs');
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                const configData = docSnap.data()[configName];
+                if (configData) {
+                    configNameInput.value = configName;
+                    pixelIpInput.value = configData.ip || '';
+                    pixelUserInput.value = configData.user || '';
+                    sshPortInput.value = configData.port || '22';
+                    
+                    // Check if the saved key exists in the current list
+                    const keyExists = Array.from(keySelectDropdown.options).some(opt => opt.value === configData.keyPath);
+                    if (configData.keyPath && !keyExists) {
+                         // If not, add it to the list to show what was saved
+                        const option = document.createElement('option');
+                        option.value = configData.keyPath;
+                        option.textContent = `(Saved) ${configData.keyPath.split('/').pop()}`;
+                        keySelectDropdown.appendChild(option);
+                    }
+                    keySelectDropdown.value = configData.keyPath || '';
+                }
+            }
+        });
+
+        deleteConfigBtn.addEventListener('click', async () => {
+            const configName = configsDropdown.value;
+            if (!userId || !configName) {
+                alert("Please select a configuration to delete.");
+                return;
+            }
+
+            if (!confirm(`Are you sure you want to delete the '${configName}' configuration?`)) {
+                return;
+            }
+
+            const docRef = doc(db, `artifacts/${appId}/users/${userId}/configs`, 'userConfigs');
+            await updateDoc(docRef, {
+                [configName]: deleteField()
+            });
+            
+            alert(`Configuration '${configName}' deleted.`);
+            loadUserConfigs(); // Refresh the dropdown
+        });
+
+        // --- SSH Key Logic ---
+        copyLsCmdBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText('ls ~/.ssh/id_* | grep -v ".pub$"');
+            alert('Command copied to clipboard!');
+        });
+
+        sshKeyPathsTextarea.addEventListener('input', (e) => {
+            const paths = e.target.value.trim().split('\n').filter(p => p.length > 0);
+            keySelectDropdown.innerHTML = '<option value="">-- Choose an existing key --</option>';
+            paths.forEach(path => {
+                const option = document.createElement('option');
+                option.value = path;
+                option.textContent = path.split('/').pop(); // Show just the filename
+                keySelectDropdown.appendChild(option);
+            });
+        });
+
+        generateKeyBtn.addEventListener('click', () => {
+            const newKeyName = `id_rsa_${pixelIpInput.value.replace(/\./g, '_') || 'new_pixel'}`;
+            const keyPath = `~/.ssh/${newKeyName}`;
+            const command = `ssh-keygen -t rsa -b 4096 -f ${keyPath} -N ""`;
+            
+            modalBody.innerHTML = `
+                <h2 class="text-xl font-bold">Generate a New SSH Key</h2>
+                <p>To create a new, dedicated SSH key for this connection, copy and run this command in your Mac Terminal:</p>
+                <div class="bg-slate-100 p-3 rounded-md font-mono text-sm break-words">${command}</div>
+                <p>After running it, paste the full path (<span class="font-mono">${keyPath}</span>) into the text area on the main page to populate the dropdown.</p>
+            `;
+            modal.classList.remove('hidden');
+        });
+
+        // --- Main Instruction Generation ---
+        generateInstructionsBtn.addEventListener('click', () => {
+            const ip = pixelIpInput.value.trim();
+            const user = pixelUserInput.value.trim();
+            const port = sshPortInput.value.trim();
+            const keyPath = keySelectDropdown.value;
+
+            if (!ip || !user || !port || !keyPath) {
+                alert("Please fill all fields and select an SSH key.");
+                return;
+            }
+            
+            const publicKeyPath = `${keyPath}.pub`;
+            const sshCommand = `ssh -i ${keyPath} -p ${port} ${user}@${ip}`;
+            const vncCommand = `vnc://${ip}:5901`;
+            const removeHostKeyCommand = `ssh-keygen -R ${ip}`;
+            
+            modalBody.innerHTML = `
+                <h2 class="text-2xl font-bold mb-4">Your Personalized Setup Plan</h2>
+                
+                <!-- Step 1: Get Public Key -->
+                <div class="card !p-4">
+                    <h3 class="font-semibold text-lg">Step 1: Get Your Public Key on Your Mac</h3>
+                    <p class="text-sm text-slate-600 mt-1">Run this in your Mac Terminal to display your public key. You will paste the output on your Debian device.</p>
+                    <div class="bg-slate-100 p-3 mt-2 rounded-md font-mono text-sm">cat ${publicKeyPath}</div>
+                </div>
+
+                <!-- Step 2: Debian Setup -->
+                <div class="card !p-4">
+                    <h3 class="font-semibold text-lg">Step 2: Configure Your Debian Device</h3>
+                    <p class="text-sm text-slate-600 mt-1">Run these commands on your Pixel's Debian system.</p>
+                    <div class="bg-slate-800 text-white p-4 mt-2 rounded-md font-mono text-xs space-y-2 overflow-x-auto">
+                        <p># 1. Install Servers</p>
+                        <p>sudo apt update && sudo apt install -y openssh-server tightvncserver xfce4 xfce4-goodies</p>
+                        <p class="mt-2"># 2. Enable SSH</p>
+                        <p>sudo systemctl enable ssh --now</p>
+                        <p class="mt-2"># 3. Add Your Public Key (REPLACE with output from Step 1)</p>
+                        <p>mkdir -p ~/.ssh</p>
+                        <p>echo 'PASTE_PUBLIC_KEY_HERE' >> ~/.ssh/authorized_keys</p>
+                        <p class="mt-2"># 4. Set Permissions</p>
+                        <p>chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys</p>
+                        <p class="mt-2"># 5. Setup VNC (Run, set password, then configure)</p>
+                        <p>vncserver</p>
+                        <p>echo '#!/bin/bash\\nxrdb \\$HOME/.Xresources\\nstartxfce4 &amp;' > ~/.vnc/xstartup</p>
+                        <p>chmod +x ~/.vnc/xstartup</p>
+                        <p>vncserver :1 -geometry 1280x720 -depth 24</p>
+                    </div>
+                </div>
+
+                <!-- Step 3: Connect -->
+                <div class="card !p-4">
+                    <h3 class="font-semibold text-lg">Step 3: Connect From Your Mac</h3>
+                    <p class="text-sm text-slate-600 mt-1">Once the Debian setup is done, use these commands on your Mac.</p>
+                    <p class="mt-2 font-semibold">To connect via SSH:</p>
+                    <div class="bg-slate-100 p-3 mt-1 rounded-md font-mono text-sm">${sshCommand}</div>
+                    
+                    <p class="mt-4 font-semibold">To connect to the graphical desktop (VNC):</p>
+                    <p class="text-sm text-slate-600 mt-1">Open Finder > Go > Connect to Server... (Cmd+K) and enter:</p>
+                    <div class="bg-slate-100 p-3 mt-1 rounded-md font-mono text-sm">${vncCommand}</div>
+                </div>
+
+                <!-- Step 4: Troubleshooting -->
+                <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-md">
+                    <h3 class="font-bold">Troubleshooting: Host Key Error?</h3>
+                    <p class="mt-1">If you get a "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!" error, it's because your Debian install was reset. This is expected.</p>
+                    <p class="mt-2">Run this command on your <b>Mac</b> to fix it, then try the SSH command again:</p>
+                    <div class="bg-slate-100 p-3 mt-2 rounded-md font-mono text-sm text-slate-800">${removeHostKeyCommand}</div>
+                </div>
+            `;
+            modal.classList.remove('hidden');
+        });
+
+    </script>
+</body>
+</html>
+
