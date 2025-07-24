@@ -6,14 +6,13 @@
     <title>SSH & VNC Cloud Configuration Manager</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script> <!-- Example, consider SVG icons -->
     <style>
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f8fafc; /* slate-50 */
         }
         .btn {
-            @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2;
+            @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors duration-200;
         }
         .btn-primary {
             @apply bg-indigo-600 hover:bg-indigo-700 focus:ring-indigo-500;
@@ -36,22 +35,30 @@
         .modal-content {
             @apply bg-white rounded-lg shadow-xl p-6 w-11/12 max-w-2xl transform transition-transform duration-300 scale-95;
         }
-        /* For showing/hiding elements */
-        .hidden {
-            display: none;
-        }
+        .hidden { display: none; }
     </style>
 </head>
 <body class="text-slate-800">
 
     <div id="app" class="container mx-auto p-4 md:p-8 max-w-4xl">
 
-        <!-- Header and Auth Section -->
-        <div class="flex justify-between items-center mb-8">
+        <!-- Firebase Setup Section -->
+        <div id="firebase-setup" class="card">
+            <h2 class="text-xl font-semibold text-slate-900">Initial Setup: Connect to Firebase</h2>
+            <p class="mt-2 text-sm text-slate-600">
+                This app uses Firebase to save your configurations securely. Please create a free Firebase project, enable Google Authentication, and paste your web app's <code class="bg-slate-100 text-red-600 p-1 rounded">firebaseConfig</code> object below.
+            </p>
+            <div id="firebase-error" class="mt-4 p-3 bg-red-100 text-red-700 rounded-md hidden"></div>
+            <textarea id="firebase-config-input" class="input-field font-mono mt-4 h-48" placeholder="const firebaseConfig = { ... };"></textarea>
+            <button id="init-firebase-btn" class="btn btn-primary w-full mt-4">Initialize & Start</button>
+        </div>
+
+        <!-- Header and Auth Section (Initially Hidden) -->
+        <div id="app-header" class="flex justify-between items-center mb-8 hidden">
             <h1 class="text-2xl md:text-3xl font-bold text-slate-900">SSH & VNC Cloud Manager</h1>
             <div id="auth-container">
                 <button id="login-btn" class="btn btn-primary">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-6-3a2 2 0 11-4 0 2 2 0 014 0zm-2 4a5 5 0 00-4.546 2.916A5.986 5.986 0 0010 16a5.986 5.986 0 004.546-2.084A5 5 0 0012 11z" clip-rule="evenodd" /></svg>
+                    <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"></path></svg>
                     Sign In with Google
                 </button>
                 <div id="user-info" class="hidden items-center">
@@ -61,11 +68,12 @@
             </div>
         </div>
 
-        <!-- Main Content - Hidden until logged in -->
+        <!-- Main Content (Initially Hidden) -->
         <main id="main-content" class="hidden">
             <div class="card space-y-6">
-                <!-- Configuration Management -->
-                <div>
+                <!-- Configuration Management, Form, etc. -->
+                <!-- THIS SECTION IS IDENTICAL TO THE PREVIOUS VERSION -->
+                 <div>
                     <h2 class="text-xl font-semibold mb-3">Configurations</h2>
                     <div class="flex flex-col sm:flex-row gap-4">
                         <select id="configs-dropdown" class="input-field flex-grow"></select>
@@ -74,10 +82,7 @@
                          <button id="delete-config-btn" class="btn btn-danger">Delete</button>
                     </div>
                 </div>
-
                 <hr class="border-slate-200">
-
-                <!-- Connection Setup Form -->
                 <div>
                     <h2 class="text-xl font-semibold mb-4">Connection Details</h2>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -99,8 +104,6 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- SSH Key Management -->
                 <div>
                     <h2 class="text-xl font-semibold mb-4">SSH Key</h2>
                     <div class="space-y-4">
@@ -112,7 +115,6 @@
                             </button>
                         </div>
                         <textarea id="ssh-key-paths" class="input-field h-24" placeholder="Paste the output here... e.g.,&#10;/Users/yourname/.ssh/id_rsa&#10;/Users/yourname/.ssh/id_ed25519"></textarea>
-                        
                         <div class="flex items-center gap-4">
                            <select id="key-select-dropdown" class="input-field flex-grow">
                                 <option value="">-- Choose an existing key --</option>
@@ -122,21 +124,17 @@
                         </div>
                     </div>
                 </div>
-
                 <div class="pt-4">
                     <button id="generate-instructions-btn" class="w-full btn btn-primary text-base py-3">Generate Setup Instructions</button>
                 </div>
             </div>
         </main>
-
     </div>
 
     <!-- Modal for Instructions -->
     <div id="instructions-modal" class="modal-overlay hidden">
         <div class="modal-content">
-            <div id="modal-body" class="space-y-6">
-                <!-- Content will be injected by JS -->
-            </div>
+            <div id="modal-body" class="space-y-6"></div>
             <div class="mt-6 text-right">
                 <button onclick="document.getElementById('instructions-modal').classList.add('hidden')" class="btn btn-secondary">Close</button>
             </div>
@@ -145,83 +143,110 @@
     
     <!-- Firebase SDK -->
     <script type="module">
-        // --- Firebase Configuration ---
-        // IMPORTANT: These are placeholders. In a real environment, these would be populated.
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-ssh-vnc-manager';
-
         // --- Firebase Imports ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteField } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Firebase Initialization ---
-        let app, auth, db, provider;
-        let userId = null;
-
-        try {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
-            provider = new GoogleAuthProvider();
-        } catch (e) {
-            console.error("Firebase initialization failed:", e);
-            alert("Could not initialize Firebase. Please check your connection and configuration.");
-        }
+        // --- App State and Global Vars ---
+        const appId = 'ssh-vnc-manager-app';
+        let auth, db, provider, userId = null;
 
         // --- UI Elements ---
-        const loginBtn = document.getElementById('login-btn');
-        const logoutBtn = document.getElementById('logout-btn');
-        const authContainer = document.getElementById('auth-container');
-        const userInfo = document.getElementById('user-info');
-        const userNameEl = document.getElementById('user-name');
+        const firebaseSetupEl = document.getElementById('firebase-setup');
+        const firebaseConfigInput = document.getElementById('firebase-config-input');
+        const initFirebaseBtn = document.getElementById('init-firebase-btn');
+        const firebaseErrorEl = document.getElementById('firebase-error');
+
+        const appHeaderEl = document.getElementById('app-header');
         const mainContent = document.getElementById('main-content');
         
+        const loginBtn = document.getElementById('login-btn');
+        const logoutBtn = document.getElementById('logout-btn');
+        const userInfo = document.getElementById('user-info');
+        const userNameEl = document.getElementById('user-name');
+        
+        // --- Other UI elements from previous version ---
         const configsDropdown = document.getElementById('configs-dropdown');
         const loadConfigBtn = document.getElementById('load-config-btn');
         const saveConfigBtn = document.getElementById('save-config-btn');
         const deleteConfigBtn = document.getElementById('delete-config-btn');
-
         const configNameInput = document.getElementById('config-name');
         const pixelIpInput = document.getElementById('pixel-ip');
         const pixelUserInput = document.getElementById('pixel-user');
         const sshPortInput = document.getElementById('ssh-port');
-        
         const copyLsCmdBtn = document.getElementById('copy-ls-cmd');
         const sshKeyPathsTextarea = document.getElementById('ssh-key-paths');
         const keySelectDropdown = document.getElementById('key-select-dropdown');
         const generateKeyBtn = document.getElementById('generate-key-btn');
         const generateInstructionsBtn = document.getElementById('generate-instructions-btn');
-
         const modal = document.getElementById('instructions-modal');
         const modalBody = document.getElementById('modal-body');
 
-        // --- Authentication Logic ---
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                userId = user.uid;
-                userNameEl.textContent = user.displayName || user.email;
-                loginBtn.classList.add('hidden');
-                userInfo.classList.remove('hidden');
-                mainContent.classList.remove('hidden');
-                loadUserConfigs();
-            } else {
-                userId = null;
-                loginBtn.classList.remove('hidden');
-                userInfo.classList.add('hidden');
-                mainContent.classList.add('hidden');
+        // --- Initialization Logic ---
+        initFirebaseBtn.addEventListener('click', () => {
+            let configText = firebaseConfigInput.value.trim();
+            if (!configText) {
+                showFirebaseError("Configuration cannot be empty.");
+                return;
+            }
+
+            // Clean the input: remove "const firebaseConfig = " and trailing semicolon
+            configText = configText.replace(/^const\s+firebaseConfig\s*=\s*/, '').replace(/;$/, '');
+
+            try {
+                const firebaseConfig = JSON.parse(configText);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                provider = new GoogleAuthProvider();
+
+                // If successful, hide setup and show app
+                firebaseSetupEl.classList.add('hidden');
+                appHeaderEl.classList.remove('hidden');
+                
+                // Set up auth state listener NOW that auth is initialized
+                setupAuthListener();
+
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                showFirebaseError(`Initialization failed. Check your config format. Error: ${e.message}`);
             }
         });
 
-        loginBtn.addEventListener('click', () => {
-            signInWithPopup(auth, provider).catch(error => console.error("Login failed:", error));
-        });
+        function showFirebaseError(message) {
+            firebaseErrorEl.textContent = message;
+            firebaseErrorEl.classList.remove('hidden');
+        }
 
-        logoutBtn.addEventListener('click', () => {
-            signOut(auth).catch(error => console.error("Logout failed:", error));
-        });
+        // --- Authentication Logic ---
+        function setupAuthListener() {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userNameEl.textContent = user.displayName || user.email;
+                    loginBtn.classList.add('hidden');
+                    userInfo.classList.remove('hidden');
+                    mainContent.classList.remove('hidden');
+                    loadUserConfigs();
+                } else {
+                    userId = null;
+                    loginBtn.classList.remove('hidden');
+                    userInfo.classList.add('hidden');
+                    mainContent.classList.add('hidden');
+                }
+            });
 
-        // --- Configuration (Firestore) Logic ---
+            loginBtn.addEventListener('click', () => {
+                signInWithPopup(auth, provider).catch(error => console.error("Login failed:", error));
+            });
+
+            logoutBtn.addEventListener('click', () => {
+                signOut(auth).catch(error => console.error("Logout failed:", error));
+            });
+        }
+        
+        // --- All other functions (Configuration, SSH Key, Instructions) are IDENTICAL to the previous version ---
         async function loadUserConfigs() {
             if (!userId) return;
             const docRef = doc(db, `artifacts/${appId}/users/${userId}/configs`, 'userConfigs');
@@ -230,7 +255,7 @@
             configsDropdown.innerHTML = '<option value="">-- Load a saved configuration --</option>';
             if (docSnap.exists()) {
                 const configs = docSnap.data();
-                Object.keys(configs).forEach(name => {
+                Object.keys(configs).sort().forEach(name => {
                     const option = document.createElement('option');
                     option.value = name;
                     option.textContent = name;
@@ -274,10 +299,8 @@
                     pixelUserInput.value = configData.user || '';
                     sshPortInput.value = configData.port || '22';
                     
-                    // Check if the saved key exists in the current list
                     const keyExists = Array.from(keySelectDropdown.options).some(opt => opt.value === configData.keyPath);
                     if (configData.keyPath && !keyExists) {
-                         // If not, add it to the list to show what was saved
                         const option = document.createElement('option');
                         option.value = configData.keyPath;
                         option.textContent = `(Saved) ${configData.keyPath.split('/').pop()}`;
@@ -305,10 +328,9 @@
             });
             
             alert(`Configuration '${configName}' deleted.`);
-            loadUserConfigs(); // Refresh the dropdown
+            loadUserConfigs();
         });
 
-        // --- SSH Key Logic ---
         copyLsCmdBtn.addEventListener('click', () => {
             navigator.clipboard.writeText('ls ~/.ssh/id_* | grep -v ".pub$"');
             alert('Command copied to clipboard!');
@@ -320,7 +342,7 @@
             paths.forEach(path => {
                 const option = document.createElement('option');
                 option.value = path;
-                option.textContent = path.split('/').pop(); // Show just the filename
+                option.textContent = path.split('/').pop();
                 keySelectDropdown.appendChild(option);
             });
         });
@@ -339,7 +361,6 @@
             modal.classList.remove('hidden');
         });
 
-        // --- Main Instruction Generation ---
         generateInstructionsBtn.addEventListener('click', () => {
             const ip = pixelIpInput.value.trim();
             const user = pixelUserInput.value.trim();
@@ -358,15 +379,11 @@
             
             modalBody.innerHTML = `
                 <h2 class="text-2xl font-bold mb-4">Your Personalized Setup Plan</h2>
-                
-                <!-- Step 1: Get Public Key -->
                 <div class="card !p-4">
                     <h3 class="font-semibold text-lg">Step 1: Get Your Public Key on Your Mac</h3>
                     <p class="text-sm text-slate-600 mt-1">Run this in your Mac Terminal to display your public key. You will paste the output on your Debian device.</p>
                     <div class="bg-slate-100 p-3 mt-2 rounded-md font-mono text-sm">cat ${publicKeyPath}</div>
                 </div>
-
-                <!-- Step 2: Debian Setup -->
                 <div class="card !p-4">
                     <h3 class="font-semibold text-lg">Step 2: Configure Your Debian Device</h3>
                     <p class="text-sm text-slate-600 mt-1">Run these commands on your Pixel's Debian system.</p>
@@ -387,20 +404,15 @@
                         <p>vncserver :1 -geometry 1280x720 -depth 24</p>
                     </div>
                 </div>
-
-                <!-- Step 3: Connect -->
                 <div class="card !p-4">
                     <h3 class="font-semibold text-lg">Step 3: Connect From Your Mac</h3>
                     <p class="text-sm text-slate-600 mt-1">Once the Debian setup is done, use these commands on your Mac.</p>
                     <p class="mt-2 font-semibold">To connect via SSH:</p>
                     <div class="bg-slate-100 p-3 mt-1 rounded-md font-mono text-sm">${sshCommand}</div>
-                    
                     <p class="mt-4 font-semibold">To connect to the graphical desktop (VNC):</p>
                     <p class="text-sm text-slate-600 mt-1">Open Finder > Go > Connect to Server... (Cmd+K) and enter:</p>
                     <div class="bg-slate-100 p-3 mt-1 rounded-md font-mono text-sm">${vncCommand}</div>
                 </div>
-
-                <!-- Step 4: Troubleshooting -->
                 <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 rounded-md">
                     <h3 class="font-bold">Troubleshooting: Host Key Error?</h3>
                     <p class="mt-1">If you get a "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!" error, it's because your Debian install was reset. This is expected.</p>
@@ -410,7 +422,6 @@
             `;
             modal.classList.remove('hidden');
         });
-
     </script>
 </body>
 </html>
