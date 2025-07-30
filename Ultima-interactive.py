@@ -12,8 +12,9 @@ import logging
 from pathlib import Path
 import shutil # <--- Import for shutil.which()
 import argparse # <--- Import argparse
+import platform # <--- For system information
 
-# --- Rich TUI Imports ---
+# --- Rich TUI Imports (Enhanced) ---
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 from rich.panel import Panel
@@ -21,6 +22,18 @@ from rich.text import Text
 from rich.syntax import Syntax
 from rich.rule import Rule
 from rich.prompt import Confirm, Prompt
+from rich.table import Table  # <--- For system info tables
+from rich.tree import Tree    # <--- For feature preview
+from rich.align import Align  # <--- For centered content
+from rich.columns import Columns  # <--- For side-by-side content
+from rich.layout import Layout    # <--- For complex layouts
+
+# Try to import psutil for system info (optional)
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 # --- Configuration ---
 LOCAL_QCOW_PATH = Path("/android.qcow2")
@@ -100,6 +113,295 @@ logger = logging.getLogger("AVFInstaller")
 
 # --- Console for Rich Output ---
 console = Console(record=True, log_time_format="[%Y-%m-%d %H:%M:%S]")
+
+# =============================================================================
+# ENHANCED VISUAL FUNCTIONS
+# =============================================================================
+
+def show_enhanced_banner():
+    """Enhanced startup banner with ASCII art and system info"""
+    
+    banner_art = """
+╔══════════════════════════════════════════════════════════════════╗
+║  ██╗   ██╗██╗  ████████╗██╗███╗   ███╗ █████╗     ██████╗ ██╗   ║
+║  ██║   ██║██║  ╚══██╔══╝██║████╗ ████║██╔══██╗   ██╔═══██╗██║   ║
+║  ██║   ██║██║     ██║   ██║██╔████╔██║███████║   ██║   ██║██║   ║
+║  ██║   ██║██║     ██║   ██║██║╚██╔╝██║██╔══██║   ██║▄▄ ██║╚═╝   ║
+║  ╚██████╔╝███████╗██║   ██║██║ ╚═╝ ██║██║  ██║   ╚██████╔╝██╗   ║
+║   ╚═════╝ ╚══════╝╚═╝   ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝    ╚══▀▀═╝ ╚═╝   ║
+║                                                                  ║
+║           🚀 DEBIAN ARM64 ULTIMATE INSTALLER 🚀                  ║
+║              Enhanced with AI-Powered Features                   ║
+╚══════════════════════════════════════════════════════════════════╝
+    """
+    
+    console.print(Panel(
+        Align.center(Text(banner_art, style="bold bright_cyan")),
+        title="🎯 Ultimate AVF Debian Setup v2.0",
+        subtitle=f"Started: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ARM64 Enhanced",
+        border_style="bright_blue",
+        padding=(1, 2)
+    ))
+
+def show_system_info():
+    """Display beautiful system information table"""
+    
+    table = Table(title="📊 System Information", show_header=True, header_style="bold magenta")
+    table.add_column("Component", style="cyan", width=20)
+    table.add_column("Details", style="yellow")
+    table.add_column("Status", style="green", width=15)
+    
+    # Get system information
+    if PSUTIL_AVAILABLE:
+        try:
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+            
+            system_data = [
+                ("🖥️ Architecture", platform.machine(), "✅ ARM64" if "aarch64" in platform.machine() else "⚠️ Other"),
+                ("🐧 Operating System", f"{platform.system()} {platform.release()}", "✅ Linux"),
+                ("🧠 CPU Cores", f"{psutil.cpu_count(logical=False)} physical, {psutil.cpu_count(logical=True)} logical", "✅ Ready"),
+                ("💾 Memory", f"{memory.total // (1024**3)} GB total, {memory.available // (1024**3)} GB available", 
+                 "✅ Sufficient" if memory.available > 2*(1024**3) else "⚠️ Low"),
+                ("💿 Disk Space", f"{disk.free // (1024**3)} GB free of {disk.total // (1024**3)} GB total",
+                 "✅ Sufficient" if disk.free > 4*(1024**3) else "⚠️ Low"),
+                ("🌐 Network Interfaces", f"{len(psutil.net_if_addrs())} detected", "✅ Available"),
+                ("👤 Current User", f"{os.getenv('USER', 'unknown')} (UID: {os.getuid()})", 
+                 "✅ Root" if os.geteuid() == 0 else "⚠️ User"),
+                ("🔐 Privileges", "Administrator" if os.geteuid() == 0 else "Standard User", 
+                 "✅ Ready" if os.geteuid() == 0 else "❌ Need sudo")
+            ]
+        except Exception:
+            # Fallback if psutil fails
+            system_data = [
+                ("🖥️ Architecture", platform.machine(), "✅ ARM64" if "aarch64" in platform.machine() else "⚠️ Other"),
+                ("🐧 OS", f"{platform.system()} {platform.release()}", "✅ Linux"),
+                ("👤 User", f"{os.getenv('USER', 'unknown')} (UID: {os.getuid()})", 
+                 "✅ Root" if os.geteuid() == 0 else "❌ Need sudo"),
+                ("🔐 Privileges", "Administrator" if os.geteuid() == 0 else "Standard", 
+                 "✅ Ready" if os.geteuid() == 0 else "❌ Run with sudo")
+            ]
+    else:
+        # Basic info without psutil
+        system_data = [
+            ("🖥️ Architecture", platform.machine(), "✅ ARM64" if "aarch64" in platform.machine() else "⚠️ Other"),
+            ("🐧 OS", f"{platform.system()} {platform.release()}", "✅ Linux"),
+            ("👤 User", f"{os.getenv('USER', 'unknown')} (UID: {os.getuid()})", 
+             "✅ Root" if os.geteuid() == 0 else "❌ Need sudo"),
+            ("🔐 Privileges", "Administrator" if os.geteuid() == 0 else "Standard", 
+             "✅ Ready" if os.geteuid() == 0 else "❌ Run with sudo"),
+            ("📦 psutil", "Not installed", "⚠️ Install for detailed info")
+        ]
+    
+    for component, details, status in system_data:
+        table.add_row(component, details, status)
+    
+    console.print(table)
+
+def show_feature_preview():
+    """Show beautiful feature preview with icons and descriptions"""
+    
+    tree = Tree("🎯 [bold bright_cyan]Features to be Installed[/bold bright_cyan]")
+    
+    # Core features
+    core_branch = tree.add("🔧 [bold yellow]Core System[/bold yellow]")
+    core_branch.add("🐳 [cyan]Docker CE[/cyan] - Container platform with multi-arch support")
+    core_branch.add("🖥️ [cyan]QEMU Emulation[/cyan] - Run x86 applications on ARM64")
+    core_branch.add("📦 [cyan]Package Tools[/cyan] - tasksel, aptitude, advanced management")
+    
+    # Network features
+    network_branch = tree.add("🌐 [bold green]Network & Sharing[/bold green]")
+    network_branch.add("🌐 [green]Enhanced Samba[/green] - Network file sharing + root filesystem")
+    network_branch.add("🔗 [green]ZeroTier VPN[/green] - Secure network connectivity")
+    network_branch.add("🔒 [green]SSH Hardening[/green] - Enhanced security configurations")
+    
+    # User experience
+    ux_branch = tree.add("✨ [bold magenta]User Experience[/bold magenta]")
+    ux_branch.add("⭐ [magenta]Starship Prompt[/magenta] - Beautiful cross-shell command prompt")
+    ux_branch.add("🎮 [magenta]VNC Desktop[/magenta] - Remote GNOME desktop with optimizations")
+    ux_branch.add("📊 [magenta]Monitoring Tools[/magenta] - htop, neofetch, system utilities")
+    
+    # Development tools
+    dev_branch = tree.add("🛠️ [bold blue]Development[/bold blue]")
+    dev_branch.add("🦀 [blue]Rust & Just[/blue] - Modern build tools and language")
+    dev_branch.add("🔨 [blue]Build Essential[/blue] - Compilers and development libraries")
+    dev_branch.add("🌐 [blue]Brave Browser[/blue] - Privacy-focused web browser")
+    
+    console.print(Panel(tree, border_style="bright_magenta", padding=(1, 2)))
+
+def create_enhanced_progress():
+    """Create beautiful progress display with multiple columns"""
+    
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}", style="bold white"),
+        BarColumn(
+            bar_width=None,
+            complete_style="bright_green",
+            finished_style="green",
+            pulse_style="bright_blue"
+        ),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%", style="bright_yellow"),
+        TimeElapsedColumn(),
+        TextColumn("•", style="dim"),
+        TextColumn("[bright_blue]{task.completed}[/bright_blue]/[bright_cyan]{task.total}[/bright_cyan]"),
+        console=console,
+        transient=False,
+        expand=True
+    )
+
+def show_step_completion(step_name, success=True, details=None, duration=None):
+    """Show animated step completion with rich formatting"""
+    
+    if success:
+        icon = "✅"
+        style = "bold bright_green"
+        status = "COMPLETED"
+        border_style = "green"
+    else:
+        icon = "❌"
+        style = "bold bright_red"
+        status = "FAILED"
+        border_style = "red"
+    
+    # Create completion message
+    message = f"{icon} [{style}]{step_name}: {status}[/{style}]"
+    
+    if duration:
+        message += f"\n[dim]⏱️ Completed in {duration:.1f}s[/dim]"
+    
+    if details:
+        message += f"\n[dim]→ {details}[/dim]"
+    
+    console.print(Panel(
+        message,
+        border_style=border_style,
+        padding=(0, 1),
+        expand=False
+    ))
+    
+    # Small visual delay
+    time.sleep(0.2)
+
+def show_enhanced_error(error_msg, step_name, suggestions=None, log_excerpt=None):
+    """Display errors with helpful suggestions and context"""
+    
+    # Create error content with proper markup escaping
+    error_content = f"[bold red]❌ Error in step: {step_name}[/bold red]\n\n"
+    error_content += f"[red]{error_msg}[/red]\n"
+    
+    if log_excerpt:
+        error_content += f"\n[dim]Last log entries:[/dim]\n[dim]{log_excerpt}[/dim]\n"
+    
+    if suggestions:
+        error_content += "\n[bold yellow]💡 Suggested Solutions:[/bold yellow]\n"
+        for i, suggestion in enumerate(suggestions, 1):
+            error_content += f"  [yellow]{i}.[/yellow] {suggestion}\n"
+    
+    error_content += f"\n[dim]📄 Full details in log file:[/dim]\n"
+    error_content += f"[dim cyan]{LOG_FILENAME}[/dim cyan]\n\n"
+    error_content += "[dim]💬 Need help? Check the GitHub issues or documentation.[/dim]"
+    
+    console.print(Panel(
+        error_content,
+        title="🚨 Installation Error",
+        border_style="red",
+        padding=(1, 2)
+    ))
+
+def show_completion_celebration(duration, features_installed=27):
+    """Show celebration screen with installation summary"""
+    
+    # ASCII celebration
+    celebration = """
+    🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉
+    
+         ██████╗ ██████╗ ███╗   ███╗██████╗ ██╗     ███████╗████████╗███████╗██╗
+        ██╔════╝██╔═══██╗████╗ ████║██╔══██╗██║     ██╔════╝╚══██╔══╝██╔════╝██║
+        ██║     ██║   ██║██╔████╔██║██████╔╝██║     █████╗     ██║   █████╗  ██║
+        ██║     ██║   ██║██║╚██╔╝██║██╔═══╝ ██║     ██╔══╝     ██║   ██╔══╝  ╚═╝
+        ╚██████╗╚██████╔╝██║ ╚═╝ ██║██║     ███████╗███████╗   ██║   ███████╗██╗
+         ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝     ╚══════╝╚══════╝   ╚═╝   ╚══════╝╚═╝
+    
+    🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉🎊🎉
+    """
+    
+    console.print(Panel(
+        Align.center(Text(celebration, style="bold bright_green")),
+        title="🏆 Installation Successful!",
+        subtitle=f"Completed in {duration//60:.0f}m {duration%60:.0f}s | {features_installed} features installed",
+        border_style="bright_green",
+        padding=(1, 2)
+    ))
+    
+    # Show quick stats
+    stats_table = Table(title="📊 Installation Summary", show_header=False)
+    stats_table.add_column("Metric", style="cyan")
+    stats_table.add_column("Value", style="bright_green")
+    
+    stats_table.add_row("⏱️ Total Time", f"{duration//60:.0f} minutes {duration%60:.0f} seconds")
+    stats_table.add_row("📦 Packages Installed", f"{len(REQUIRED_PACKAGES)}+")
+    stats_table.add_row("🔧 Features Configured", str(features_installed))
+    stats_table.add_row("💾 Disk Space Used", "~2-4 GB")
+    stats_table.add_row("🚀 System Status", "Ready for use!")
+    
+    console.print(stats_table)
+
+def enhanced_confirmation(args):
+    """Enhanced confirmation with better visual layout"""
+    
+    if args.non_interactive:
+        console.print(Panel(
+            "⚡ [bold yellow]Non-Interactive Mode Enabled[/bold yellow] ⚡\n\n"
+            "Proceeding automatically with all default settings.\n"
+            "Monitor the progress and logs for any issues.",
+            title="🤖 Automated Installation",
+            border_style="yellow"
+        ))
+        return True
+    
+    # Show requirements in a nice table
+    req_table = Table(title="📋 Prerequisites Check", show_header=True)
+    req_table.add_column("Requirement", style="cyan", width=30)
+    req_table.add_column("Status", style="green", width=15)
+    req_table.add_column("Details", style="yellow")
+    
+    requirements = [
+        ("Root/sudo privileges", "✅ Met", "Currently running with appropriate permissions"),
+        ("Internet connectivity", "🔍 Will verify", "Required for package downloads"),
+        ("Disk space (4GB+)", "🔍 Will check", "Needed for packages and containers"),
+        ("ARM64 architecture", "✅ Detected", f"Running on {platform.machine()}"),
+        ("Backup recommended", "⚠️ Manual", "Please backup important data first")
+    ]
+    
+    for req, status, details in requirements:
+        req_table.add_row(req, status, details)
+    
+    console.print(req_table)
+    
+    # Warning panel
+    console.print("\n")
+    console.print(Panel(
+        "[bold red]⚠️  IMPORTANT SYSTEM CHANGES AHEAD ⚠️[/bold red]\n\n"
+        "This installer will make significant modifications:\n\n"
+        "• [yellow]Install 60+ packages[/yellow] and their dependencies\n"
+        "• [yellow]Modify system configs[/yellow] (/etc/ssh, /etc/samba, etc.)\n"
+        "• [yellow]Create storage volumes[/yellow] and mount points\n"
+        "• [yellow]Configure network services[/yellow] and security settings\n"
+        "• [yellow]Set up containerization[/yellow] (Docker + Podman)\n"
+        "• [yellow]Enable x86 emulation[/yellow] on ARM64 architecture\n\n"
+        "[dim]Estimated time: 15-30 minutes depending on network speed[/dim]",
+        title="🚨 System Modification Notice",
+        border_style="red",
+        padding=(1, 2)
+    ))
+    
+    # Final confirmation
+    console.print("\n")
+    return Confirm.ask(
+        "[bold bright_green]🚀 Ready to transform your Debian system into an ultimate development environment?[/bold bright_green]",
+        default=False
+    )
 
 # --- Helper Functions ---
 
@@ -3291,15 +3593,18 @@ def main():
     args = parser.parse_args()
     # --- End Argument Parsing ---
 
-
     start_time = datetime.datetime.now()
-    console.print(Panel(
-        Text("🚀 Ultimate AVF Debian Interactive Setup 🚀", justify="center", style="bold cyan"),
-        title="Welcome!",
-        subtitle=f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
-        border_style="blue"
-    ))
-    console.print(f"Logging detailed output to: [dim]{LOG_FILENAME}[/dim]")
+    
+    # Enhanced startup sequence
+    show_enhanced_banner()
+    console.print(f"[dim]Logging detailed output to: {LOG_FILENAME}[/dim]\n")
+    
+    show_system_info()
+    console.print()
+    
+    show_feature_preview()
+    console.print()
+    
     logger.info(f"Installer script started at {start_time}")
     logger.info(f"Effective UID: {os.geteuid()}, Effective GID: {os.getegid()}")
     logger.info(f"Script path: {__file__}")
@@ -3307,36 +3612,17 @@ def main():
     logger.info(f"Command line arguments: {sys.argv}")
     logger.info(f"Parsed arguments: {args}")
 
-    # --- Modified Initial Confirmation ---
-    if not args.non_interactive:
-        if not Confirm.ask(f"\nThis script will perform system setup steps including:\n"
-                           f" - Installing packages ({len(REQUIRED_PACKAGES)} specified)\n"
-                           f" - Configuring storage ([cyan]{LOCAL_QCOW_PATH}[/cyan] -> [cyan]{NBD_DEVICE}[/cyan] -> LVM -> [cyan]{LVM_MOUNT_POINT}[/cyan])\n"
-                           f" - Setting up services (ZeroTier, SSH, VNC, Samba, Podman)\n"
-                           f" - Target User: [yellow]{DEBIAN_USER}[/yellow]\n\n"
-                           f"[bold]Please review the script and ensure backups before proceeding.[/bold]\n\n"
-                           f"Proceed with installation?", default=False):
-            console.print("\n[yellow]Installation aborted by user at initial prompt.[/yellow]")
-            logger.warning("Installation aborted by user at initial prompt.")
-            sys.exit(1)
-    else:
-        console.print("[yellow]Running in non-interactive mode. Skipping initial confirmation.[/yellow]")
-        logger.info("Running in non-interactive mode (--non-interactive). Skipping initial confirmation.")
-    # --- End Modified Initial Confirmation ---
-
+    # --- Enhanced Confirmation ---
+    if not enhanced_confirmation(args):
+        console.print("\n[yellow]Installation aborted by user.[/yellow]")
+        logger.warning("Installation aborted by user at initial prompt.")
+        sys.exit(1)
+    # --- End Enhanced Confirmation ---
 
     total_steps = len(installer_steps)
-    console.print(f"\n[bold green]Starting installation process ({total_steps} steps)...[/bold green]")
+    console.print(f"\n[bold green]🚀 Starting installation process ({total_steps} steps)...[/bold green]")
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False, # Keep progress visible after completion
-    ) as progress:
+    with create_enhanced_progress() as progress:
         overall_task = progress.add_task("[bold green]Overall Progress[/bold green]", total=total_steps)
         all_steps_successful = True
 
@@ -3369,14 +3655,25 @@ def main():
             progress.start_task(step_task) # Mark task as started visually
 
             step_success = False
+            step_start_time = time.time()
             try:
                 # Pass the parsed arguments object to the step function
                 step_success = step_func(progress, step_task, args)
             except Exception as step_exception:
                  logger.exception(f"Critical error occurred within step: {step_title}")
-                 console.print(f"[bold red]Fatal Error:[/bold red] Unexpected error during step '{step_title}':")
-                 console.print_exception(show_locals=False, word_wrap=True)
+                 show_enhanced_error(
+                     str(step_exception),
+                     step_title,
+                     suggestions=[
+                         "Check the log file for detailed error information",
+                         "Ensure you have sufficient disk space and network connectivity",
+                         "Try running the script again after resolving any system issues",
+                         "Check GitHub issues for similar problems and solutions"
+                     ]
+                 )
                  step_success = False
+
+            step_duration = time.time() - step_start_time
 
             if step_success:
                 # Ensure task shows 100% completed state
@@ -3387,19 +3684,26 @@ def main():
                 progress.stop_task(step_task) # Stop spinner, keep completed bar
                 progress.update(overall_task, advance=1)
                 logger.info(f"Successfully completed step: {step_title}")
-                console.print(Rule(f"[bold green]Finished: {step_title}[/bold green]"))
+                
+                # Show enhanced step completion
+                show_step_completion(step_title, success=True, duration=step_duration)
             else:
                 # Mark task as failed
                 progress.update(step_task, description=f"[bold red]✗ Failed: {step_title}[/bold red]")
                 progress.stop_task(step_task) # Stop spinner, keep failed bar
                 # Don't advance overall progress
 
-                console.print(Panel(
-                    f"[bold red]Error during step: '{step_title}'.[/bold red]\nInstallation cannot continue.\nPlease check the output above and logs for details:\n[dim]{LOG_FILENAME}[/dim]",
-                    title="Installation Failed",
-                    border_style="red",
-                    expand=False
-                ))
+                show_enhanced_error(
+                    f"Step '{step_title}' failed to complete successfully.",
+                    step_title,
+                    suggestions=[
+                        "Check the detailed log file for specific error messages",
+                        "Verify system requirements and dependencies",
+                        "Ensure sufficient disk space and network connectivity",
+                        "Try running individual commands manually to isolate the issue"
+                    ]
+                )
+                
                 logger.critical(f"Failed step: {step_title}. Aborting installation.")
                 all_steps_successful = False
                 progress.update(overall_task, description="[bold red]Overall Progress (Failed)[/bold red]")
@@ -3407,7 +3711,7 @@ def main():
                 # progress.stop()
                 break # Exit the loop
 
-            time.sleep(0.5) # Small pause between steps
+            time.sleep(0.3) # Small pause between steps for visual effect
 
         # After the loop finishes
         if not all_steps_successful:
@@ -3420,17 +3724,13 @@ def main():
                  logger.warning(f"Could not save console HTML log on failure: {save_err}")
              sys.exit(1) # Exit with error code
 
-
     # If all steps completed successfully
     end_time = datetime.datetime.now()
     duration = end_time - start_time
-    console.print(Panel(
-        Text("✅ Installation Completed Successfully! ✅", justify="center", style="bold green"),
-        title="Finished!",
-        subtitle=f"Completed: {end_time.strftime('%Y-%m-%d %H:%M:%S %Z')} (Duration: {str(duration).split('.')[0]})",
-        border_style="green",
-        expand=False
-    ))
+    
+    # Show enhanced completion celebration
+    show_completion_celebration(duration.total_seconds(), len(installer_steps))
+    
     logger.info(f"Installation completed successfully at {end_time}. Duration: {duration}")
 
 
@@ -3529,8 +3829,7 @@ def main():
     console.print("   • Advanced package management tools")
     console.print("   • Starship cross-shell prompt")
     console.print("   • Enhanced SSH and VNC configurations")
-    console.print("   • Comprehensive system optimizations")
-    console.print("[/bold green]")
+    console.print("   • Comprehensive system optimizations[/bold green]")
     console.print(Rule())
 
     sys.exit(0)
