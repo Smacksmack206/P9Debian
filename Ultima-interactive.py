@@ -60,6 +60,11 @@ REQUIRED_PACKAGES = [
     "psmisc", "lsof",
     "podman", # Provides podman
     "uidmap", "fuse-overlayfs", "slirp4netns", "dbus-user-session",
+    # Enhanced packages for new features
+    "qemu-user-static", "binfmt-support", "qemu-system-x86", # x86 emulation support
+    "tasksel", "aptitude", "apt-file", "deborphan", "localepurge", # Package management tools
+    "zsh", "bash-completion", # Shell enhancements
+    "lsb-release", # For Docker installation
 ]
 
 KEY_COMMANDS_TO_VALIDATE = [
@@ -74,6 +79,12 @@ KEY_COMMANDS_TO_VALIDATE = [
     "sudo",
     "podman",
     "systemctl",
+    # Enhanced commands for new features
+    "docker", # Will be installed separately
+    "qemu-x86_64-static",
+    "tasksel",
+    "aptitude",
+    "update-binfmts",
 ]
 
 # --- Setup Logging ---
@@ -1383,6 +1394,699 @@ def step_enable_storage_services(progress, task_id, args): # Added args
         return False
 
 
+@installer_step("Install Docker CE with Multi-Architecture Support")
+def step_install_docker(progress, task_id, args):
+    """Installs Docker CE with ARM64 and x86 emulation support."""
+    logger.info("Starting Docker CE installation with multi-architecture support.")
+    
+    # Check if Docker is already installed
+    docker_path = shutil.which('docker')
+    if docker_path:
+        console.print(f"Docker already installed ([dim]{docker_path}[/dim]). Checking version...")
+        version_result = run_command(['docker', '--version'], description="Checking Docker version", show_output=True)
+        if version_result:
+            logger.info(f"Docker already installed at {docker_path}.")
+            progress.update(task_id, advance=1)
+            return True
+    
+    console.print("[cyan]Installing Docker CE with multi-architecture support...[/cyan]")
+    logger.info("Docker not found. Proceeding with installation.")
+    
+    # Remove old Docker packages if they exist
+    old_packages = ["docker", "docker-engine", "docker.io", "containerd", "runc"]
+    for package in old_packages:
+        run_command(['apt-get', 'remove', '-y', package], description=f"Removing old {package}", check=False)
+    
+    # Install prerequisites (most should already be installed)
+    prereq_packages = ["ca-certificates", "curl", "gnupg", "lsb-release"]
+    install_env = os.environ.copy()
+    install_env['DEBIAN_FRONTEND'] = 'noninteractive'
+    
+    if not run_command(['apt-get', 'install', '-y'] + prereq_packages, description="Installing Docker prerequisites", env=install_env):
+        console.print("[bold red]Error:[/bold red] Failed to install Docker prerequisites.")
+        logger.error("Failed to install Docker prerequisites.")
+        return False
+    
+    # Add Docker's official GPG key
+    keyring_dir = Path("/etc/apt/keyrings")
+    keyring_file = keyring_dir / "docker.gpg"
+    docker_key_url = "https://download.docker.com/linux/debian/gpg"
+    
+    try:
+        keyring_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+        logger.debug(f"Ensured keyring directory exists: {keyring_dir}")
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed creating keyring directory {keyring_dir}: {e}")
+        logger.exception(f"Failed creating keyring directory {keyring_dir}")
+        return False
+    
+    # Download and install GPG key
+    curl_cmd = ['curl', '-fsSL', docker_key_url]
+    gpg_cmd = ['gpg', '--dearmor', '-o', str(keyring_file)]
+    
+    # Use pipe to combine curl and gpg
+    download_result = run_command(f"curl -fsSL {docker_key_url} | gpg --dearmor -o {keyring_file}", 
+                                  description="Downloading Docker GPG key", shell=True)
+    if not download_result:
+        logger.error(f"Failed to download Docker GPG key from {docker_key_url}")
+        return False
+    
+    # Set correct permissions on keyring file
+    try:
+        os.chmod(keyring_file, 0o644)
+        logger.info(f"Set permissions 644 on {keyring_file}")
+    except OSError as e:
+        console.print(f"[bold red]Error:[/bold red] Failed setting permissions on GPG key {keyring_file}: {e}")
+        logger.error(f"Failed setting permissions on {keyring_file}: {e}")
+        return False
+    
+    # Get system architecture
+    arch_result = run_command(['dpkg', '--print-architecture'], description="Getting system architecture")
+    if not arch_result:
+        console.print("[bold red]Error:[/bold red] Could not determine system architecture.")
+        logger.error("Failed to determine system architecture.")
+        return False
+    arch = arch_result.stdout.strip()
+    
+    # Get distribution codename
+    codename_result = run_command(['lsb_release', '-cs'], description="Getting distribution codename")
+    if not codename_result:
+        console.print("[bold red]Error:[/bold red] Could not determine distribution codename.")
+        logger.error("Failed to determine distribution codename.")
+        return False
+    codename = codename_result.stdout.strip()
+    
+    # Add Docker repository
+    sources_file = Path("/etc/apt/sources.list.d/docker.list")
+    repo_line = f"deb [arch={arch} signed-by={keyring_file}] https://download.docker.com/linux/debian {codename} stable"
+    
+    if not write_file(sources_file, repo_line + "\n", permissions="0644", show_content=True):
+        logger.error(f"Failed to write Docker sources file {sources_file}")
+        return False
+    
+    # Update package lists
+    if not run_command(['apt-get', 'update', '-qq'], description="Updating package lists after adding Docker repo"):
+        logger.error("apt-get update failed after adding Docker repository.")
+        return False
+    
+    # Install Docker CE packages
+    docker_packages = [
+        "docker-ce",
+        "docker-ce-cli", 
+        "containerd.io",
+        "docker-buildx-plugin",
+        "docker-compose-plugin"
+    ]
+    
+    if not run_command(['apt-get', 'install', '-y'] + docker_packages, 
+                       description="Installing Docker CE packages", env=install_env):
+        logger.error("Failed to install Docker CE packages.")
+        return False
+    
+    # Add user to docker group
+    if not run_command(['usermod', '-aG', 'docker', DEBIAN_USER], description=f"Adding {DEBIAN_USER} to docker group"):
+        logger.error(f"Failed to add {DEBIAN_USER} to docker group.")
+        return False
+    
+    # Configure Docker daemon for multi-arch support
+    docker_config_dir = Path("/etc/docker")
+    docker_config_file = docker_config_dir / "daemon.json"
+    
+    docker_config = {
+        "experimental": True,
+        "features": {
+            "buildkit": True
+        },
+        "default-address-pools": [
+            {
+                "base": "172.17.0.0/12",
+                "size": 24
+            }
+        ]
+    }
+    
+    try:
+        docker_config_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+        import json
+        docker_config_content = json.dumps(docker_config, indent=2)
+        if not write_file(docker_config_file, docker_config_content, permissions="0644"):
+            logger.error(f"Failed to write Docker daemon configuration {docker_config_file}")
+            return False
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to configure Docker daemon: {e}")
+        logger.exception("Failed to configure Docker daemon")
+        return False
+    
+    # Enable and start Docker service
+    if not run_command(['systemctl', 'enable', 'docker'], description="Enabling Docker service"):
+        logger.error("Failed to enable Docker service.")
+        return False
+    
+    if not run_command(['systemctl', 'start', 'docker'], description="Starting Docker service"):
+        logger.error("Failed to start Docker service.")
+        return False
+    
+    # Restart Docker to apply configuration
+    if not run_command(['systemctl', 'restart', 'docker'], description="Restarting Docker with new configuration"):
+        logger.error("Failed to restart Docker with new configuration.")
+        return False
+    
+    # Verify Docker installation
+    time.sleep(3)  # Give Docker time to start
+    docker_path_final = shutil.which('docker')
+    if docker_path_final:
+        console.print(f"[green]✓[/green] Docker CE installed successfully ([dim]{docker_path_final}[/dim]).")
+        logger.info(f"Docker CE installed successfully at {docker_path_final}.")
+        
+        # Test Docker
+        test_result = run_command(['docker', 'version'], description="Testing Docker installation", show_output=True, check=False)
+        if test_result and test_result.returncode == 0:
+            console.print("[green]✓[/green] Docker is running and accessible.")
+        else:
+            console.print("[yellow]Warning:[/yellow] Docker installed but may not be fully functional yet.")
+        
+        progress.update(task_id, advance=1)
+        return True
+    else:
+        console.print("[bold red]Error:[/bold red] Docker installation commands succeeded, but 'docker' command not found.")
+        logger.error("Docker installation reported success, but verification failed.")
+        return False
+
+
+@installer_step("Configure QEMU User Static & BFMT Support")
+def step_configure_qemu_binfmt(progress, task_id, args):
+    """Configures QEMU user static and binfmt support for x86 emulation on ARM64."""
+    logger.info("Starting QEMU user static and binfmt configuration for x86 emulation.")
+    
+    console.print("[cyan]Configuring QEMU user static and binfmt support for x86 emulation...[/cyan]")
+    
+    # Verify qemu-user-static is installed (should be from package installation step)
+    qemu_x86_path = shutil.which('qemu-x86_64-static')
+    if not qemu_x86_path:
+        console.print("[bold red]Error:[/bold red] qemu-x86_64-static not found. Package installation may have failed.")
+        logger.error("qemu-x86_64-static not found after package installation.")
+        return False
+    
+    console.print(f"[green]✓[/green] QEMU user static found at: [dim]{qemu_x86_path}[/dim]")
+    
+    # Enable and start binfmt-support service
+    if not run_command(['systemctl', 'enable', 'binfmt-support'], description="Enabling binfmt-support service"):
+        logger.error("Failed to enable binfmt-support service.")
+        return False
+    
+    if not run_command(['systemctl', 'start', 'binfmt-support'], description="Starting binfmt-support service"):
+        logger.error("Failed to start binfmt-support service.")
+        return False
+    
+    # Register binary formats
+    console.print("[cyan]Registering x86 and x86_64 binary formats...[/cyan]")
+    if not run_command(['update-binfmts', '--enable'], description="Enabling binary formats", check=False):
+        logger.warning("update-binfmts --enable returned non-zero, but this might be normal.")
+    
+    # Verify binfmt registration
+    binfmt_check = run_command(['update-binfmts', '--display'], description="Checking registered binary formats", show_output=True, check=False)
+    if binfmt_check and ('qemu-x86_64' in binfmt_check.stdout or 'qemu-i386' in binfmt_check.stdout):
+        console.print("[green]✓[/green] x86 binary formats registered successfully.")
+        logger.info("x86 binary formats registered successfully.")
+    else:
+        console.print("[yellow]Warning:[/yellow] Could not verify x86 binary format registration.")
+        logger.warning("Could not verify x86 binary format registration.")
+    
+    # Test x86 emulation if Docker is available
+    docker_available = shutil.which('docker')
+    if docker_available:
+        console.print("[cyan]Testing x86 emulation with Docker...[/cyan]")
+        # Test with a simple x86_64 container
+        test_cmd = ['docker', 'run', '--rm', '--platform', 'linux/amd64', 'hello-world']
+        test_result = run_command(test_cmd, description="Testing x86 emulation", check=False, timeout=60)
+        
+        if test_result and test_result.returncode == 0:
+            console.print("[green]✓[/green] x86 emulation verified working with Docker.")
+            logger.info("x86 emulation verified working with Docker.")
+        else:
+            console.print("[yellow]Warning:[/yellow] x86 emulation test failed. May work after reboot.")
+            logger.warning("x86 emulation test with Docker failed.")
+    else:
+        console.print("[yellow]Info:[/yellow] Docker not available for x86 emulation testing.")
+    
+    logger.info("QEMU user static and binfmt configuration completed.")
+    progress.update(task_id, advance=1)
+    return True
+
+
+@installer_step("Install Additional Package Management Tools")
+def step_install_package_tools(progress, task_id, args):
+    """Installs additional package management tools like tasksel and aptitude."""
+    logger.info("Starting installation of additional package management tools.")
+    
+    console.print("[cyan]Installing additional package management tools...[/cyan]")
+    
+    # These packages should already be in REQUIRED_PACKAGES, but verify they're installed
+    additional_tools = ["tasksel", "aptitude", "apt-file", "deborphan", "localepurge"]
+    
+    # Check which tools are already available
+    available_tools = []
+    missing_tools = []
+    
+    for tool in additional_tools:
+        if shutil.which(tool):
+            available_tools.append(tool)
+            console.print(f"[green]✓[/green] {tool} already available")
+        else:
+            missing_tools.append(tool)
+    
+    if missing_tools:
+        console.print(f"[yellow]Installing missing tools:[/yellow] {', '.join(missing_tools)}")
+        install_env = os.environ.copy()
+        install_env['DEBIAN_FRONTEND'] = 'noninteractive'
+        
+        if not run_command(['apt-get', 'install', '-y'] + missing_tools, 
+                           description="Installing missing package management tools", 
+                           env=install_env):
+            console.print("[bold red]Error:[/bold red] Failed to install some package management tools.")
+            logger.error("Failed to install missing package management tools.")
+            return False
+    
+    # Update apt-file database if apt-file is available
+    if shutil.which('apt-file'):
+        console.print("[cyan]Updating apt-file database...[/cyan]")
+        apt_file_result = run_command(['apt-file', 'update'], 
+                                      description="Updating apt-file database", 
+                                      check=False, timeout=300)
+        if apt_file_result and apt_file_result.returncode == 0:
+            console.print("[green]✓[/green] apt-file database updated.")
+        else:
+            console.print("[yellow]Warning:[/yellow] apt-file database update failed or timed out.")
+            logger.warning("apt-file update failed or timed out.")
+    
+    # Configure tasksel if available
+    if shutil.which('tasksel'):
+        console.print("[cyan]Configuring tasksel...[/cyan]")
+        # Just verify tasksel works
+        tasksel_test = run_command(['tasksel', '--list-tasks'], 
+                                   description="Testing tasksel functionality", 
+                                   check=False, show_output=False)
+        if tasksel_test and tasksel_test.returncode == 0:
+            console.print("[green]✓[/green] tasksel is functional.")
+        else:
+            console.print("[yellow]Warning:[/yellow] tasksel may not be fully functional.")
+    
+    console.print("[green]✓[/green] Additional package management tools configured.")
+    logger.info("Additional package management tools installation completed.")
+    progress.update(task_id, advance=1)
+    return True
+
+
+@installer_step("Enhance Configuration Files & Environment")
+def step_enhance_configs(progress, task_id, args):
+    """Backs up and enhances user configuration files with useful aliases and settings."""
+    logger.info(f"Starting configuration file enhancement for user {DEBIAN_USER}.")
+    
+    try:
+        user_info = pwd.getpwnam(DEBIAN_USER)
+        user_home = Path(user_info.pw_dir)
+        user_gid = user_info.pw_gid
+        user_group_info = grp.getgrgid(user_gid)
+        user_primary_group = user_group_info.gr_name
+    except KeyError:
+        console.print(f"[bold red]Error:[/bold red] Cannot find user {DEBIAN_USER} for configuration enhancement.")
+        logger.error(f"User {DEBIAN_USER} not found for configuration enhancement.")
+        return False
+    
+    console.print(f"[cyan]Enhancing configuration files for user [yellow]{DEBIAN_USER}[/yellow]...[/cyan]")
+    
+    # Create backup directory
+    backup_dir = user_home / f".config_backup_{current_timestamp}"
+    if not run_command(['mkdir', '-p', str(backup_dir)], user=DEBIAN_USER, description="Creating backup directory"):
+        logger.error(f"Failed to create backup directory {backup_dir}")
+        return False
+    
+    # Configuration files to backup and enhance
+    config_files = {
+        ".bashrc": user_home / ".bashrc",
+        ".profile": user_home / ".profile", 
+        ".bash_profile": user_home / ".bash_profile",
+        ".zshrc": user_home / ".zshrc",
+        ".vimrc": user_home / ".vimrc",
+        ".gitconfig": user_home / ".gitconfig"
+    }
+    
+    # Backup existing files
+    for filename, filepath in config_files.items():
+        if filepath.exists():
+            backup_path = backup_dir / filename
+            try:
+                shutil.copy2(str(filepath), str(backup_path))
+                console.print(f"[green]✓[/green] Backed up {filename}")
+                logger.info(f"Backed up {filepath} to {backup_path}")
+            except Exception as e:
+                console.print(f"[yellow]Warning:[/yellow] Failed to backup {filename}: {e}")
+                logger.warning(f"Failed to backup {filepath}: {e}")
+    
+    # Enhance .bashrc
+    bashrc_file = user_home / ".bashrc"
+    bashrc_enhancements = '''
+# Enhanced configuration added by interactive update script
+# History settings
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+export HISTCONTROL=ignoredups:erasedups
+shopt -s histappend
+
+# Better ls aliases
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias ls='ls --color=auto'
+
+# Useful aliases
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+alias df='df -h'
+alias du='du -h'
+alias free='free -h'
+alias psg='ps aux | grep'
+alias ..='cd ..'
+alias ...='cd ../..'
+
+# Docker aliases
+alias dps='docker ps'
+alias dpsa='docker ps -a'
+alias di='docker images'
+alias drmi='docker rmi'
+alias dexec='docker exec -it'
+alias dlog='docker logs'
+alias dstop='docker stop'
+alias dstart='docker start'
+
+# System information
+alias sysinfo='neofetch'
+alias ports='netstat -tulanp'
+alias myip='curl -s ifconfig.me'
+
+# Safety aliases
+alias rm='rm -i'
+alias cp='cp -i'
+alias mv='mv -i'
+
+# Development environment
+export EDITOR=nano
+export VISUAL=nano
+
+# Add local bin to PATH if it exists
+if [ -d "$HOME/.local/bin" ]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Add cargo bin to PATH if it exists
+if [ -d "$HOME/.cargo/bin" ]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+fi
+
+# Docker environment
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+'''
+    
+    try:
+        # Check if enhancements are already present
+        if bashrc_file.exists():
+            current_content = bashrc_file.read_text()
+            if "Enhanced configuration added by interactive update script" not in current_content:
+                with open(bashrc_file, 'a') as f:
+                    f.write(bashrc_enhancements)
+                console.print("[green]✓[/green] Enhanced .bashrc with useful aliases and settings.")
+                logger.info("Enhanced .bashrc with additional configuration.")
+            else:
+                console.print("[green]✓[/green] .bashrc already enhanced.")
+        else:
+            # Create .bashrc if it doesn't exist
+            if not write_file(bashrc_file, bashrc_enhancements, owner=DEBIAN_USER, group=user_primary_group, permissions="0644"):
+                logger.error(f"Failed to create enhanced .bashrc for {DEBIAN_USER}")
+                return False
+            console.print("[green]✓[/green] Created enhanced .bashrc.")
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to enhance .bashrc: {e}")
+        logger.exception("Failed to enhance .bashrc")
+        return False
+    
+    # Enhance .profile
+    profile_file = user_home / ".profile"
+    profile_enhancements = '''
+# Enhanced profile configuration
+# Set PATH to include user's private bin directories
+if [ -d "$HOME/bin" ] ; then
+    PATH="$HOME/bin:$PATH"
+fi
+
+if [ -d "$HOME/.local/bin" ] ; then
+    PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Docker environment
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+
+# Development environment variables
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# ARM64 specific optimizations
+export MAKEFLAGS="-j$(nproc)"
+'''
+    
+    try:
+        if profile_file.exists():
+            current_content = profile_file.read_text()
+            if "Enhanced profile configuration" not in current_content:
+                with open(profile_file, 'a') as f:
+                    f.write(profile_enhancements)
+                console.print("[green]✓[/green] Enhanced .profile with environment settings.")
+            else:
+                console.print("[green]✓[/green] .profile already enhanced.")
+        else:
+            if not write_file(profile_file, profile_enhancements, owner=DEBIAN_USER, group=user_primary_group, permissions="0644"):
+                logger.error(f"Failed to create enhanced .profile for {DEBIAN_USER}")
+                return False
+            console.print("[green]✓[/green] Created enhanced .profile.")
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to enhance .profile: {e}")
+        logger.exception("Failed to enhance .profile")
+        return False
+    
+    # Create a basic .vimrc if it doesn't exist
+    vimrc_file = user_home / ".vimrc"
+    if not vimrc_file.exists():
+        vimrc_content = '''# Basic vim configuration
+set number
+set tabstop=4
+set shiftwidth=4
+set expandtab
+set autoindent
+set hlsearch
+set incsearch
+syntax on
+'''
+        if write_file(vimrc_file, vimrc_content, owner=DEBIAN_USER, group=user_primary_group, permissions="0644"):
+            console.print("[green]✓[/green] Created basic .vimrc configuration.")
+        else:
+            console.print("[yellow]Warning:[/yellow] Failed to create .vimrc.")
+    
+    # Set ownership of backup directory
+    try:
+        shutil.chown(str(backup_dir), user=DEBIAN_USER, group=user_primary_group)
+        for item in backup_dir.iterdir():
+            shutil.chown(str(item), user=DEBIAN_USER, group=user_primary_group)
+    except Exception as e:
+        console.print(f"[yellow]Warning:[/yellow] Failed to set ownership of backup directory: {e}")
+        logger.warning(f"Failed to set ownership of backup directory: {e}")
+    
+    console.print(f"[green]✓[/green] Configuration files enhanced and backed up to [cyan]{backup_dir}[/cyan].")
+    logger.info("Configuration file enhancement completed.")
+    progress.update(task_id, advance=1)
+    return True
+
+
+@installer_step("Install Starship Cross-Shell Prompt")
+def step_install_starship(progress, task_id, args):
+    """Installs and configures Starship cross-shell prompt."""
+    logger.info("Starting Starship cross-shell prompt installation.")
+    
+    # Check if Starship is already installed
+    starship_path = shutil.which('starship')
+    if starship_path:
+        console.print(f"Starship already installed ([dim]{starship_path}[/dim]). Skipping installation.")
+        logger.info(f"Starship already installed at {starship_path}.")
+        progress.update(task_id, advance=1)
+        return True
+    
+    console.print("[cyan]Installing Starship cross-shell prompt...[/cyan]")
+    logger.info("Starship not found. Proceeding with installation.")
+    
+    # Download and install Starship
+    install_cmd = "curl -sS https://starship.rs/install.sh | sh -s -- --yes"
+    install_result = run_command(install_cmd, description="Installing Starship", shell=True, show_output=True, timeout=300)
+    
+    if not install_result:
+        console.print("[bold red]Error:[/bold red] Starship installation failed.")
+        logger.error("Starship installation script failed.")
+        return False
+    
+    # Verify installation
+    starship_path_final = shutil.which('starship')
+    if not starship_path_final:
+        console.print("[bold red]Error:[/bold red] Starship installation succeeded but command not found.")
+        logger.error("Starship installation succeeded but verification failed.")
+        return False
+    
+    console.print(f"[green]✓[/green] Starship installed at: [dim]{starship_path_final}[/dim]")
+    
+    # Get user's home directory
+    try:
+        user_info = pwd.getpwnam(DEBIAN_USER)
+        user_home = Path(user_info.pw_dir)
+    except KeyError:
+        console.print(f"[bold red]Error:[/bold red] Cannot find user {DEBIAN_USER} for Starship configuration.")
+        logger.error(f"User {DEBIAN_USER} not found for Starship configuration.")
+        return False
+    
+    # Create Starship configuration directory
+    config_dir = user_home / ".config"
+    if not run_command(['mkdir', '-p', str(config_dir)], user=DEBIAN_USER, description="Creating .config directory"):
+        logger.error(f"Failed to create config directory {config_dir} as user {DEBIAN_USER}")
+        return False
+    
+    # Create custom Starship configuration
+    starship_config_file = config_dir / "starship.toml"
+    starship_config_content = '''# Starship configuration for Debian ARM64 VM
+
+format = """
+[╭─user───❯](bold blue) $username\\
+[@ ](bold blue)$hostname\\
+[ in ](bold blue)$directory\\
+$git_branch\\
+$git_status\\
+$python\\
+$nodejs\\
+$rust\\
+$docker_context\\
+$time\\
+
+[╰─❯](bold blue) """
+
+[username]
+style_user = "bold dimmed blue"
+show_always = true
+
+[hostname]
+ssh_only = false
+style = "bold dimmed blue"
+
+[directory]
+style = "cyan"
+truncation_length = 3
+truncate_to_repo = false
+
+[git_branch]
+symbol = "🌱 "
+style = "bold green"
+
+[git_status]
+style = "bold yellow"
+
+[python]
+symbol = "🐍 "
+style = "bold green"
+
+[nodejs]
+symbol = "⬢ "
+style = "bold green"
+
+[rust]
+symbol = "🦀 "
+style = "bold red"
+
+[docker_context]
+symbol = "🐳 "
+style = "bold blue"
+
+[time]
+disabled = false
+format = '🕙[\\[ $time \\]]($style) '
+time_format = "%T"
+style = "bold yellow"
+
+[character]
+success_symbol = "[❯](bold green)"
+error_symbol = "[❯](bold red)"
+'''
+    
+    if not write_file(starship_config_file, starship_config_content, owner=DEBIAN_USER, permissions="0644"):
+        console.print("[bold red]Error:[/bold red] Failed to write Starship configuration file.")
+        logger.error(f"Failed writing Starship configuration {starship_config_file}")
+        return False
+    
+    # Configure Starship for bash
+    bashrc_file = user_home / ".bashrc"
+    starship_init_bash = 'eval "$(starship init bash)"'
+    
+    try:
+        if bashrc_file.exists():
+            bashrc_content = bashrc_file.read_text()
+            if starship_init_bash not in bashrc_content:
+                # Append Starship initialization
+                with open(bashrc_file, 'a') as f:
+                    f.write(f"\n# Initialize Starship prompt\n{starship_init_bash}\n")
+                console.print("[green]✓[/green] Starship configured for bash.")
+                logger.info("Starship configured for bash in .bashrc")
+            else:
+                console.print("[green]✓[/green] Starship already configured for bash.")
+                logger.info("Starship already configured for bash")
+        else:
+            # Create .bashrc with Starship
+            if not write_file(bashrc_file, f"# Starship prompt\n{starship_init_bash}\n", owner=DEBIAN_USER, permissions="0644"):
+                logger.error(f"Failed to create .bashrc with Starship for {DEBIAN_USER}")
+                return False
+            console.print("[green]✓[/green] Created .bashrc with Starship configuration.")
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to configure Starship for bash: {e}")
+        logger.exception("Failed to configure Starship for bash")
+        return False
+    
+    # Configure Starship for zsh if it exists
+    zshrc_file = user_home / ".zshrc"
+    starship_init_zsh = 'eval "$(starship init zsh)"'
+    
+    # Check if zsh is installed
+    zsh_path = shutil.which('zsh')
+    if zsh_path:
+        try:
+            if zshrc_file.exists():
+                zshrc_content = zshrc_file.read_text()
+                if starship_init_zsh not in zshrc_content:
+                    with open(zshrc_file, 'a') as f:
+                        f.write(f"\n# Initialize Starship prompt\n{starship_init_zsh}\n")
+                    console.print("[green]✓[/green] Starship configured for zsh.")
+                    logger.info("Starship configured for zsh in .zshrc")
+                else:
+                    console.print("[green]✓[/green] Starship already configured for zsh.")
+            else:
+                # Create .zshrc with Starship
+                if not write_file(zshrc_file, f"# Starship prompt\n{starship_init_zsh}\n", owner=DEBIAN_USER, permissions="0644"):
+                    logger.warning(f"Failed to create .zshrc with Starship for {DEBIAN_USER}")
+                else:
+                    console.print("[green]✓[/green] Created .zshrc with Starship configuration.")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Failed to configure Starship for zsh: {e}")
+            logger.warning(f"Failed to configure Starship for zsh: {e}")
+    
+    console.print("[green]✓[/green] Starship cross-shell prompt installed and configured.")
+    logger.info("Starship installation and configuration completed.")
+    progress.update(task_id, advance=1)
+    return True
+
+
 @installer_step("Install Brave Browser")
 def step_install_brave(progress, task_id, args): # Added args
     """Installs Brave Browser from its official APT repository."""
@@ -1656,12 +2360,12 @@ WantedBy=multi-user.target
     return True
 
 
-@installer_step("Configure Samba Server")
+@installer_step("Configure Enhanced Samba Server")
 def step_configure_samba(progress, task_id, args): # Added args
-    """Configures Samba server for sharing the LVM data volume."""
-    logger.info(f"Starting Samba configuration for share '{SAMBA_SHARE_NAME}' -> {SAMBA_SHARE_PATH}")
+    """Configures enhanced Samba server for sharing the LVM data volume and root filesystem."""
+    logger.info(f"Starting enhanced Samba configuration for share '{SAMBA_SHARE_NAME}' -> {SAMBA_SHARE_PATH}")
     smb_conf_file = Path("/etc/samba/smb.conf")
-    console.print(f"Configuring Samba server share '[{SAMBA_SHARE_NAME}]' -> [cyan]{SAMBA_SHARE_PATH}[/cyan] in [cyan]{smb_conf_file}[/cyan]...")
+    console.print(f"Configuring enhanced Samba server with multiple shares in [cyan]{smb_conf_file}[/cyan]...")
 
     # Backup existing config
     if smb_conf_file.exists():
@@ -1695,34 +2399,107 @@ def step_configure_samba(progress, task_id, args): # Added args
             console.print(f"[yellow]Info:[/yellow] Successfully mounted {share_path_obj}. Continuing Samba setup.")
             logger.info(f"Mounted {share_path_obj} before Samba setup.")
 
-
-    # Define smb.conf content (using a basic template)
-    smb_conf_content = f"""# Samba configuration generated by AVF installer ({current_timestamp})
+    # Define enhanced smb.conf content with root filesystem sharing
+    smb_conf_content = f"""# Enhanced Samba configuration generated by AVF installer ({current_timestamp})
 [global]
     workgroup = WORKGROUP
-    server string = %h AVF VM Share (Samba)
-    netbios name = debian-avf-vm
-    # Basic security settings
+    server string = %h Debian ARM64 Server (Enhanced)
+    netbios name = debian-arm64-vm
+    
+    # Security settings
     security = user
     map to guest = Bad User
+    guest account = nobody
+    
+    # Network settings - Allow connections from private networks
+    interfaces = lo eth0 zt+ 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8
+    bind interfaces only = no
+    hosts allow = 127.0.0.1 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8
+    hosts deny = 0.0.0.0/0
+    
+    # Protocol settings
+    min protocol = SMB2
+    max protocol = SMB3
+    
+    # Performance settings
+    socket options = TCP_NODELAY IPTOS_LOWDELAY SO_RCVBUF=131072 SO_SNDBUF=131072
+    read raw = yes
+    write raw = yes
+    max xmit = 65535
+    dead time = 15
+    getwd cache = yes
+    
     # Logging
     log file = /var/log/samba/log.%m
     max log size = 1000
+    log level = 1
     logging = file
     panic action = /usr/share/samba/panic-action %d
-    # Performance/Misc
-    server role = standalone server
+    
+    # Authentication
     obey pam restrictions = yes
     unix password sync = yes
     passwd program = /usr/bin/passwd %u
     passwd chat = *Enter\\snew\\s*\\spassword:* %n\\n *Retype\\snew\\s*\\spassword:* %n\\n *password\\supdated\\ssuccessfully* .
     pam password change = yes
-    # Recommended for modern clients
-    min protocol = SMB2
-    # interfaces = lo eth0 # Consider restricting interfaces if needed
-    # bind interfaces only = yes
+    
+    # Misc
+    dns proxy = no
+    load printers = no
+    printing = bsd
+    printcap name = /dev/null
+    disable spoolss = yes
+    server role = standalone server
 
-# Share Definition
+# Root filesystem share (READ-ONLY for security)
+[RootFS]
+    comment = Root Filesystem (Read-Only for Security)
+    path = /
+    browseable = yes
+    read only = yes
+    guest ok = no
+    valid users = {DEBIAN_USER} @{DEBIAN_GROUP}
+    create mask = 0644
+    directory mask = 0755
+    follow symlinks = yes
+    wide links = yes
+    unix extensions = no
+    # Hide sensitive directories
+    veto files = /lost+found/
+    hide dot files = yes
+
+# Root filesystem share (READ-WRITE - DANGEROUS!)
+[RootFS-RW]
+    comment = Root Filesystem (Read-Write - EXTREMELY DANGEROUS!)
+    path = /
+    browseable = no
+    read only = no
+    guest ok = no
+    valid users = {DEBIAN_USER}
+    admin users = {DEBIAN_USER}
+    create mask = 0644
+    directory mask = 0755
+    follow symlinks = yes
+    wide links = yes
+    unix extensions = no
+    # Hide this share by default and add warnings
+    hide dot files = yes
+    veto files = /lost+found/
+    # Force ownership to prevent system damage
+    force user = {DEBIAN_USER}
+    force group = {DEBIAN_GROUP}
+
+# Home directory share
+[Homes]
+    comment = Home Directories
+    browseable = no
+    read only = no
+    create mask = 0700
+    directory mask = 0700
+    valid users = %S
+    follow symlinks = yes
+
+# Data volume share (from existing configuration)
 [{SAMBA_SHARE_NAME}]
     comment = Shared Data Volume ({SAMBA_SHARE_PATH})
     path = {SAMBA_SHARE_PATH}
@@ -1743,18 +2520,17 @@ def step_configure_samba(progress, task_id, args): # Added args
     write list = @{DEBIAN_GROUP} {DEBIAN_USER}
 """
     if not write_file(smb_conf_file, smb_conf_content, permissions="0644"):
-        console.print("[bold red]Error:[/bold red] Failed to write Samba configuration file.")
-        logger.error(f"Failed writing Samba configuration {smb_conf_file}")
+        console.print("[bold red]Error:[/bold red] Failed to write enhanced Samba configuration file.")
+        logger.error(f"Failed writing enhanced Samba configuration {smb_conf_file}")
         return False
-    console.print("[green]✓[/green] Samba configuration file written.")
-    logger.info(f"Samba configuration {smb_conf_file} written successfully.")
-
+    console.print("[green]✓[/green] Enhanced Samba configuration file written.")
+    logger.info(f"Enhanced Samba configuration {smb_conf_file} written successfully.")
 
     console.print("[bold yellow]Action Required:[/bold yellow] Set Samba password for user '{DEBIAN_USER}':")
     console.print(f"  Run: [white on black] sudo smbpasswd -a {DEBIAN_USER} [/white on black]")
     logger.info(f"User needs to set samba password for {DEBIAN_USER} using smbpasswd -a.")
 
-    console.print("[cyan]Verifying Samba configuration using 'testparm'...[/cyan]")
+    console.print("[cyan]Verifying enhanced Samba configuration using 'testparm'...[/cyan]")
     testparm_result = run_command(['testparm', '-s'], description="Running testparm", show_output=True, check=False) # -s suppresses questions
     if not testparm_result or testparm_result.returncode != 0:
         # testparm returns 0 even with warnings, check stderr for critical errors usually
@@ -1765,7 +2541,6 @@ def step_configure_samba(progress, task_id, args): # Added args
         else:
              console.print("[yellow]Warning:[/yellow] 'testparm' returned non-zero or command failed, but no critical 'ERROR:' found in stderr. Check output carefully.")
              logger.warning(f"testparm returned non-zero ({testparm_result.returncode if testparm_result else 'N/A'}) or failed, but no obvious critical errors.")
-
 
     console.print("[cyan]Enabling and restarting Samba services (smbd, nmbd)...[/cyan]")
     logger.info("Enabling and restarting Samba services.")
@@ -1787,17 +2562,341 @@ def step_configure_samba(progress, task_id, args): # Added args
     logger.info(f"Samba service status check: smbd active = {smbd_active}, nmbd active = {nmbd_active}")
 
     if smbd_active and nmbd_active:
-        console.print("[green]✓[/green] Samba services (smbd, nmbd) configured, enabled and are active.")
+        console.print("[green]✓[/green] Enhanced Samba services (smbd, nmbd) configured, enabled and are active.")
+        console.print("[bold yellow]Available Shares:[/bold yellow]")
+        console.print(f"  • [cyan]RootFS[/cyan] - Root filesystem (read-only, secure)")
+        console.print(f"  • [cyan]RootFS-RW[/cyan] - Root filesystem (read-write, DANGEROUS!)")
+        console.print(f"  • [cyan]Homes[/cyan] - User home directories")
+        console.print(f"  • [cyan]{SAMBA_SHARE_NAME}[/cyan] - Data volume")
+        console.print("[bold red]WARNING:[/bold red] RootFS-RW share provides full system access - use with extreme caution!")
     else:
         failed_services = []
         if not smbd_active: failed_services.append('smbd')
         if not nmbd_active: failed_services.append('nmbd')
-        console.print(f"[bold red]Error:[/bold red] Samba configuration applied, but service(s) [{', '.join(failed_services)}] failed to start or are not active.")
+        console.print(f"[bold red]Error:[/bold red] Enhanced Samba configuration applied, but service(s) [{', '.join(failed_services)}] failed to start or are not active.")
         logger.error(f"Samba service(s) not active after configuration: {failed_services}")
         run_command(['systemctl', 'status', 'smbd', 'nmbd', '--no-pager'], description="Samba service status", check=False, show_output=True)
         return False # Fail the step if services aren't running
 
-    logger.info("Samba configuration step finished.")
+    logger.info("Enhanced Samba configuration step finished.")
+    progress.update(task_id, advance=1)
+    return True
+
+
+@installer_step("Enhanced SSH Configuration")
+def step_enhanced_ssh_config(progress, task_id, args):
+    """Configures SSH with enhanced security and incorporates existing SSH keys."""
+    logger.info("Starting enhanced SSH configuration.")
+    
+    console.print("[cyan]Configuring SSH with enhanced security...[/cyan]")
+    
+    # Backup existing SSH configuration
+    sshd_config_file = Path("/etc/ssh/sshd_config")
+    if sshd_config_file.exists():
+        backup_file = sshd_config_file.with_suffix(f".backup-{current_timestamp}")
+        try:
+            shutil.copy2(str(sshd_config_file), str(backup_file))
+            console.print(f"[green]✓[/green] Backed up SSH config to [cyan]{backup_file}[/cyan]")
+            logger.info(f"Backed up {sshd_config_file} to {backup_file}")
+        except Exception as e:
+            console.print(f"[yellow]Warning:[/yellow] Could not backup SSH config: {e}")
+            logger.warning(f"Could not backup SSH config: {e}")
+    
+    # Enhanced SSH configuration
+    enhanced_sshd_config = '''# Enhanced SSH configuration for security and functionality
+
+# Basic settings
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Security settings
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+
+# Connection settings
+X11Forwarding yes
+X11DisplayOffset 10
+X11UseLocalhost no
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# Performance settings
+ClientAliveInterval 60
+ClientAliveCountMax 3
+MaxAuthTries 6
+MaxSessions 10
+MaxStartups 10:30:100
+
+# Logging
+SyslogFacility AUTH
+LogLevel INFO
+
+# Allow specific users
+AllowUsers droid
+
+# Compression
+Compression yes
+'''
+    
+    if not write_file(sshd_config_file, enhanced_sshd_config, permissions="0644"):
+        console.print("[bold red]Error:[/bold red] Failed to write enhanced SSH configuration.")
+        logger.error("Failed to write enhanced SSH configuration.")
+        return False
+    
+    # Test SSH configuration
+    test_result = run_command(['sshd', '-t'], description="Testing SSH configuration", check=False)
+    if not test_result or test_result.returncode != 0:
+        console.print("[bold red]Error:[/bold red] SSH configuration test failed.")
+        logger.error("SSH configuration test failed.")
+        return False
+    
+    # Restart SSH service
+    if not run_command(['systemctl', 'restart', 'ssh'], description="Restarting SSH service"):
+        logger.error("Failed to restart SSH service.")
+        return False
+    
+    # Ensure SSH directory exists with proper permissions
+    try:
+        user_info = pwd.getpwnam(DEBIAN_USER)
+        ssh_dir = Path(f"/home/{DEBIAN_USER}/.ssh")
+        
+        # Create SSH directory as user
+        if not run_command(['mkdir', '-p', str(ssh_dir)], user=DEBIAN_USER, description="Ensuring SSH directory exists"):
+            logger.error(f"Failed to create SSH directory {ssh_dir}")
+            return False
+        
+        # Set proper permissions
+        run_command(['chmod', '700', str(ssh_dir)], user=DEBIAN_USER, description="Setting SSH directory permissions")
+        
+        # Create/ensure authorized_keys file
+        auth_keys_file = ssh_dir / "authorized_keys"
+        if not run_command(['touch', str(auth_keys_file)], user=DEBIAN_USER, description="Creating authorized_keys file"):
+            logger.warning("Failed to create authorized_keys file")
+        else:
+            run_command(['chmod', '600', str(auth_keys_file)], user=DEBIAN_USER, description="Setting authorized_keys permissions")
+        
+        console.print(f"[green]✓[/green] SSH directory and authorized_keys configured for [yellow]{DEBIAN_USER}[/yellow].")
+        
+    except KeyError:
+        console.print(f"[bold red]Error:[/bold red] User {DEBIAN_USER} not found for SSH configuration.")
+        logger.error(f"User {DEBIAN_USER} not found for SSH configuration.")
+        return False
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] Failed to configure SSH directory: {e}")
+        logger.exception("Failed to configure SSH directory")
+        return False
+    
+    console.print("[green]✓[/green] Enhanced SSH configuration completed.")
+    console.print(f"[bold yellow]Action Required:[/bold yellow] Add your public SSH key to [cyan]/home/{DEBIAN_USER}/.ssh/authorized_keys[/cyan]")
+    
+    logger.info("Enhanced SSH configuration completed.")
+    progress.update(task_id, advance=1)
+    return True
+
+
+@installer_step("Enhanced VNC Configuration with Security")
+def step_enhanced_vnc_config(progress, task_id, args):
+    """Configures VNC with enhanced security and better desktop integration."""
+    logger.info(f"Starting enhanced VNC configuration for user {DEBIAN_USER}.")
+    
+    try:
+        user_info = pwd.getpwnam(DEBIAN_USER)
+        user_home = Path(user_info.pw_dir)
+        vnc_dir = user_home / ".vnc"
+        vnc_xstartup_path = vnc_dir / "xstartup"
+        vnc_config_path = vnc_dir / "config"
+    except KeyError:
+        console.print(f"[bold red]Error:[/bold red] Cannot find user {DEBIAN_USER} for VNC configuration.")
+        logger.error(f"User {DEBIAN_USER} not found for VNC configuration.")
+        return False
+    
+    console.print(f"[cyan]Configuring enhanced VNC for user [yellow]{DEBIAN_USER}[/yellow]...[/cyan]")
+    
+    # Ensure VNC directory exists
+    if not run_command(['mkdir', '-p', str(vnc_dir)], user=DEBIAN_USER, description="Creating VNC directory"):
+        logger.error(f"Failed to create VNC directory {vnc_dir}")
+        return False
+    
+    run_command(['chmod', '700', str(vnc_dir)], user=DEBIAN_USER, description="Setting VNC directory permissions")
+    
+    # Enhanced VNC startup script
+    enhanced_xstartup = '''#!/bin/bash
+# Enhanced VNC startup script with better desktop integration
+
+# Unset session manager variables
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+
+# Set up environment
+export XDG_SESSION_DESKTOP=gnome
+export GNOME_SHELL_SESSION_MODE=debian
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_TYPE=x11
+
+# Load X resources
+[ -r $HOME/.Xresources ] && xrdb $HOME/.Xresources
+[ -r $HOME/.Xdefaults ] && xrdb -merge $HOME/.Xdefaults
+
+# Set up fonts
+xset +fp /usr/share/fonts/X11/misc/
+xset +fp /usr/share/fonts/X11/100dpi/
+xset +fp /usr/share/fonts/X11/75dpi/
+xset +fp /usr/share/fonts/X11/Type1/
+xset fp rehash
+
+# Start D-Bus session
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    eval $(dbus-launch --sh-syntax --exit-with-session)
+fi
+
+# Start window manager
+if command -v gnome-session >/dev/null 2>&1; then
+    gnome-session &
+elif command -v xfce4-session >/dev/null 2>&1; then
+    xfce4-session &
+elif command -v startlxde >/dev/null 2>&1; then
+    startlxde &
+else
+    # Fallback to basic window manager
+    if command -v openbox >/dev/null 2>&1; then
+        openbox &
+    elif command -v fluxbox >/dev/null 2>&1; then
+        fluxbox &
+    else
+        /usr/bin/x-window-manager &
+    fi
+fi
+
+# Start file manager
+if command -v nautilus >/dev/null 2>&1; then
+    nautilus --no-desktop &
+elif command -v thunar >/dev/null 2>&1; then
+    thunar &
+elif command -v pcmanfm >/dev/null 2>&1; then
+    pcmanfm &
+fi
+
+# Start terminal
+if command -v gnome-terminal >/dev/null 2>&1; then
+    gnome-terminal &
+elif command -v xfce4-terminal >/dev/null 2>&1; then
+    xfce4-terminal &
+elif command -v lxterminal >/dev/null 2>&1; then
+    lxterminal &
+else
+    xterm &
+fi
+
+# Keep the session alive
+wait
+'''
+    
+    if not write_file(vnc_xstartup_path, enhanced_xstartup, owner=DEBIAN_USER, permissions="0755"):
+        console.print("[bold red]Error:[/bold red] Failed to write enhanced VNC startup script.")
+        logger.error("Failed to write enhanced VNC startup script.")
+        return False
+    
+    # VNC configuration file
+    vnc_config_content = '''# Enhanced VNC configuration
+geometry=1920x1080
+depth=24
+dpi=96
+'''
+    
+    if not write_file(vnc_config_path, vnc_config_content, owner=DEBIAN_USER, permissions="0644"):
+        console.print("[yellow]Warning:[/yellow] Failed to write VNC config file.")
+        logger.warning("Failed to write VNC config file.")
+    
+    # Enhanced VNC systemd service
+    vnc_service_file = Path("/etc/systemd/system/vncserver@.service")
+    
+    try:
+        vnc_user_info = pwd.getpwnam(DEBIAN_USER)
+        primary_gid = vnc_user_info.pw_gid
+        vnc_group_name = DEBIAN_USER
+        try:
+            vnc_group_name = grp.getgrgid(primary_gid).gr_name
+        except KeyError:
+            logger.warning(f"Could not find group name for primary GID {primary_gid}")
+        
+        vnc_service_group = DEBIAN_GROUP if check_group_exists(DEBIAN_GROUP) else vnc_group_name
+        
+    except KeyError as e:
+        console.print(f"[bold red]Error:[/bold red] Cannot find VNC user '{DEBIAN_USER}': {e}")
+        logger.critical(f"VNC user '{DEBIAN_USER}' not found.")
+        return False
+    
+    # Enhanced systemd service content
+    enhanced_vnc_service = f'''[Unit]
+Description=Enhanced TigerVNC server for user {DEBIAN_USER}
+Documentation=man:vncserver(1) man:Xvnc(1)
+After=syslog.target network-online.target graphical.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User={DEBIAN_USER}
+Group={vnc_service_group}
+WorkingDirectory={user_home}
+
+# Clean any existing sessions
+ExecStartPre=-/usr/bin/vncserver -kill :%i
+ExecStartPre=-/bin/rm -f /tmp/.X%i-lock /tmp/.X11-unix/X%i
+
+# Start VNC Server with enhanced settings
+ExecStart=/usr/bin/vncserver :%i \\
+    -desktop "Debian-ARM64-Desktop" \\
+    -geometry 1920x1080 \\
+    -depth 24 \\
+    -dpi 96 \\
+    -localhost no \\
+    -alwaysshared \\
+    -SecurityTypes VncAuth \\
+    -auth {user_home}/.Xauthority \\
+    -xstartup {vnc_xstartup_path}
+
+# Stop VNC server
+ExecStop=/usr/bin/vncserver -kill :%i
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+'''
+    
+    if not write_file(vnc_service_file, enhanced_vnc_service, permissions="0644"):
+        console.print("[bold red]Error:[/bold red] Failed to write enhanced VNC systemd service.")
+        logger.error("Failed to write enhanced VNC systemd service.")
+        return False
+    
+    # Reload systemd and enable service
+    if not run_command(['systemctl', 'daemon-reload'], description="Reloading systemd daemon"):
+        console.print("[yellow]Warning:[/yellow] Failed to reload systemd daemon.")
+        logger.warning("Failed to reload systemd daemon.")
+    
+    vnc_instance_service = f"vncserver@{VNC_DISPLAY_NUM}.service"
+    if not run_command(['systemctl', 'enable', vnc_instance_service], description=f"Enabling {vnc_instance_service}"):
+        console.print(f"[bold red]Error:[/bold red] Failed to enable VNC service {vnc_instance_service}.")
+        logger.error(f"Failed to enable VNC service {vnc_instance_service}.")
+        return False
+    
+    console.print("[green]✓[/green] Enhanced VNC configuration completed.")
+    console.print(f"[bold yellow]Action Required:[/bold yellow] Set VNC password for user '{DEBIAN_USER}':")
+    console.print(f"  Run: [white on black] sudo -u {DEBIAN_USER} vncpasswd [/white on black]")
+    console.print(f"  Start VNC: [white on black] sudo systemctl start {vnc_instance_service} [/white on black]")
+    
+    logger.info("Enhanced VNC configuration completed.")
     progress.update(task_id, advance=1)
     return True
 
@@ -2023,23 +3122,154 @@ runroot = "{rootful_runroot}" # Use a separate runroot within home too
     return True
 
 
-@installer_step("Final Cleanup")
+@installer_step("Final Cleanup & System Optimization")
 def step_cleanup(progress, task_id, args): # Added args
-    """Performs final cleanup tasks like clearing apt cache."""
-    logger.info("Starting final cleanup step.")
-    console.print("[cyan]Cleaning up APT package cache...[/cyan]")
+    """Performs final cleanup tasks, system optimization, and verification."""
+    logger.info("Starting final cleanup and system optimization step.")
+    
+    console.print("[cyan]Performing final cleanup and system optimization...[/cyan]")
+    
+    # Clean APT cache
     clean_env = os.environ.copy()
     clean_env['DEBIAN_FRONTEND'] = 'noninteractive'
-    if run_command(['apt-get', 'clean'], env=clean_env, description="apt-get clean"):
+    if run_command(['apt-get', 'clean'], env=clean_env, description="Cleaning APT cache"):
         console.print("[green]✓[/green] APT cache cleaned.")
         logger.info("APT cache cleaned successfully.")
     else:
         console.print("[yellow]Warning:[/yellow] 'apt-get clean' command failed.")
         logger.warning("'apt-get clean' failed.")
+    
+    # Remove unnecessary packages
+    if run_command(['apt-get', 'autoremove', '-y'], env=clean_env, description="Removing unnecessary packages"):
+        console.print("[green]✓[/green] Unnecessary packages removed.")
+        logger.info("Unnecessary packages removed successfully.")
+    else:
+        console.print("[yellow]Warning:[/yellow] 'apt-get autoremove' failed.")
+        logger.warning("'apt-get autoremove' failed.")
+    
+    # Update locate database if available
+    if shutil.which('updatedb'):
+        console.print("[cyan]Updating locate database...[/cyan]")
+        updatedb_result = run_command(['updatedb'], description="Updating locate database", check=False, timeout=300)
+        if updatedb_result and updatedb_result.returncode == 0:
+            console.print("[green]✓[/green] Locate database updated.")
+        else:
+            console.print("[yellow]Warning:[/yellow] Failed to update locate database.")
+    
+    # Update man database
+    if shutil.which('mandb'):
+        console.print("[cyan]Updating man database...[/cyan]")
+        mandb_result = run_command(['mandb', '-q'], description="Updating man database", check=False, timeout=180)
+        if mandb_result and mandb_result.returncode == 0:
+            console.print("[green]✓[/green] Man database updated.")
+        else:
+            console.print("[yellow]Warning:[/yellow] Failed to update man database.")
+    
+    # Verify key services are running
+    console.print("[cyan]Verifying key services...[/cyan]")
+    key_services = ['ssh', 'smbd', 'docker']
+    service_status = {}
+    
+    for service in key_services:
+        status_result = run_command(['systemctl', 'is-active', '--quiet', service], check=False, description=f"Checking {service} status")
+        service_status[service] = status_result and status_result.returncode == 0
+        
+        if service_status[service]:
+            console.print(f"[green]✓[/green] {service} service is active")
+        else:
+            console.print(f"[yellow]⚠[/yellow] {service} service is not active")
+    
+    # Create system information script
+    try:
+        user_info = pwd.getpwnam(DEBIAN_USER)
+        user_home = Path(user_info.pw_dir)
+        sysinfo_script = user_home / "system-info.sh"
+        
+        sysinfo_content = '''#!/bin/bash
+# System Information Script
+# Generated by Ultima-interactive.py installer
 
-    # Add other cleanup if needed (e.g., remove downloaded files)
+echo "=== Debian ARM64 System Information ==="
+echo "Date: $(date)"
+echo "Uptime: $(uptime -p)"
+echo "Kernel: $(uname -r)"
+echo "Architecture: $(uname -m)"
+echo ""
 
-    logger.info("Final cleanup step finished.")
+echo "=== Hardware Information ==="
+echo "CPU: $(lscpu | grep 'Model name' | cut -d: -f2 | xargs)"
+echo "Memory: $(free -h | grep '^Mem:' | awk '{print $2 " total, " $3 " used, " $7 " available"}')"
+echo "Disk Usage: $(df -h / | tail -1 | awk '{print $2 " total, " $3 " used, " $4 " available (" $5 " used)"}')"
+echo ""
+
+echo "=== Network Information ==="
+echo "IP Addresses:"
+ip -4 addr show | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}' | grep -v 127.0.0.1
+echo ""
+
+echo "=== Docker Information ==="
+if command -v docker >/dev/null 2>&1; then
+    echo "Docker Version: $(docker --version)"
+    echo "Docker Status: $(systemctl is-active docker)"
+    echo "Docker Images: $(docker images --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}' 2>/dev/null || echo 'None')"
+else
+    echo "Docker: Not installed"
+fi
+echo ""
+
+echo "=== Services Status ==="
+for service in ssh smbd docker vncserver@1; do
+    status=$(systemctl is-active $service 2>/dev/null || echo "inactive")
+    echo "$service: $status"
+done
+echo ""
+
+echo "=== Storage Information ==="
+echo "LVM Status:"
+if command -v vgs >/dev/null 2>&1; then
+    vgs 2>/dev/null || echo "No volume groups found"
+    lvs 2>/dev/null || echo "No logical volumes found"
+else
+    echo "LVM not available"
+fi
+echo ""
+
+echo "=== Samba Shares ==="
+if command -v smbclient >/dev/null 2>&1; then
+    smbclient -L localhost -N 2>/dev/null | grep -E "Disk|IPC" || echo "No shares available"
+else
+    echo "Samba client not available"
+fi
+'''
+        
+        if write_file(sysinfo_script, sysinfo_content, owner=DEBIAN_USER, permissions="0755"):
+            console.print(f"[green]✓[/green] System information script created at [cyan]{sysinfo_script}[/cyan]")
+        else:
+            console.print("[yellow]Warning:[/yellow] Failed to create system information script.")
+            
+    except Exception as e:
+        console.print(f"[yellow]Warning:[/yellow] Failed to create system information script: {e}")
+        logger.warning(f"Failed to create system information script: {e}")
+    
+    # Set up log rotation for installer logs
+    logrotate_config = Path("/etc/logrotate.d/avf-installer")
+    logrotate_content = f'''{LOG_FILENAME} {{
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 644 root root
+}}
+'''
+    
+    if write_file(logrotate_config, logrotate_content, permissions="0644"):
+        console.print("[green]✓[/green] Log rotation configured for installer logs.")
+    else:
+        console.print("[yellow]Warning:[/yellow] Failed to configure log rotation.")
+    
+    logger.info("Final cleanup and system optimization finished.")
     progress.update(task_id, advance=1)
     return True
 
@@ -2204,7 +3434,7 @@ def main():
     logger.info(f"Installation completed successfully at {end_time}. Duration: {duration}")
 
 
-    # Post-Installation Info - Updated Podman instructions
+    # Post-Installation Info - Updated with all new features
     # Get paths again dynamically for the summary message
     try:
         user_info = pwd.getpwnam(DEBIAN_USER)
@@ -2213,30 +3443,94 @@ def main():
         rootful_config_dir = user_home / ".config/containers_root"
         rootful_storage_conf_file = rootful_config_dir / "storage.conf"
         rootful_runroot = user_home / ".local/run/containers_root/storage" # As defined in step
+        starship_config = user_home / ".config/starship.toml"
+        sysinfo_script = user_home / "system-info.sh"
     except KeyError:
          # Should not happen if install succeeded, but handle gracefully
          rootless_storage_conf_file = f"/home/{DEBIAN_USER}/.config/containers/storage.conf (approx)"
          rootful_storage_conf_file = f"/home/{DEBIAN_USER}/.config/containers_root/storage.conf (approx)"
          rootful_runroot = f"/home/{DEBIAN_USER}/.local/run/containers_root/storage (approx)"
-
+         starship_config = f"/home/{DEBIAN_USER}/.config/starship.toml (approx)"
+         sysinfo_script = f"/home/{DEBIAN_USER}/system-info.sh (approx)"
 
     console.print(Rule("[bold yellow]Post-Installation Actions & Reminders[/bold yellow]"))
-    console.print(f"- [key] SSH Key:[/key] Ensure your public SSH key is added to [cyan]/home/{DEBIAN_USER}/.ssh/authorized_keys[/cyan]")
-    console.print(f"- [key] VNC Password:[/key] Set VNC password for user [yellow]{DEBIAN_USER}[/yellow]: Run [white on black] sudo -u {DEBIAN_USER} vncpasswd [/white on black]")
-    console.print(f"- [key] Samba Password:[/key] Set Samba password for user [yellow]{DEBIAN_USER}[/yellow]: Run [white on black] sudo smbpasswd -a {DEBIAN_USER} [/white on black]")
-    console.print(f"- [network] ZeroTier Auth:[/network] Authorize this device in ZeroTier Central ([dim]my.zerotier.com[/dim]) for network [cyan]{ZT_NETWORK_ID}[/cyan].")
-    console.print(f"- [desktop] VNC Service:[/desktop] Status: [white on black] sudo systemctl status vncserver@{VNC_DISPLAY_NUM}.service [/white on black]. Start/Stop: [white on black] ... start ... [/white on black] / [white on black] ... stop ... [/white on black]")
-    console.print(f"- [storage] LVM Volume:[/storage] Mounted at [cyan]{LVM_MOUNT_POINT}[/cyan]. Check with [white on black] df -h {LVM_MOUNT_POINT} [/white on black].")
-    console.print(f"- [storage] Podman Rootless:[/storage] Config: [cyan]{rootless_storage_conf_file}[/cyan]. Storage: [cyan]~/.local/share/containers/storage[/cyan].")
-    console.print(f"- [storage] Podman Rootful (Home):[/storage] Config: [cyan]{rootful_storage_conf_file}[/cyan]. Storage: [cyan]~/.local/share/containers_root/storage[/cyan].")
-    console.print(f"    [bold yellow]Requires explicit flags/env vars when using 'sudo podman':[/bold yellow]")
-    console.print(f"    Flags: [white on black] sudo podman --storage-config={rootful_storage_conf_file} --runroot={rootful_runroot} ... [/white on black]")
-    console.print(f"    Env Vars: Set [white on black]CONTAINERS_STORAGE_CONF[/white on black] and [white on black]CONTAINERS_RUNROOT[/white on black] before `sudo podman`.")
-    console.print(f"- [docker] Podman Test:[/docker] Login as [yellow]{DEBIAN_USER}[/yellow] (SSH/VNC) & run:")
-    console.print(f"    Rootless: [white on black] podman info [/white on black] / [white on black] podman run hello-world [/white on black]")
-    console.print(f"    Rootful (Home): [white on black] sudo podman --storage-config={rootful_storage_conf_file} --runroot={rootful_runroot} run hello-world [/white on black]")
-    console.print("- [system] Reboot:[/system] A [bold]reboot[/bold] is recommended to ensure all services start correctly: [white on black] sudo reboot [/white on black]")
-    console.print(f"- [log] Log File:[/log] Detailed installation logs are in [dim]{LOG_FILENAME}[/dim].")
+    
+    # Essential Setup Actions
+    console.print("[bold cyan]🔧 Essential Setup Actions:[/bold cyan]")
+    console.print(f"- [key] SSH Key:[/key] Add your public SSH key to [cyan]/home/{DEBIAN_USER}/.ssh/authorized_keys[/cyan]")
+    console.print(f"- [key] VNC Password:[/key] Set VNC password: [white on black] sudo -u {DEBIAN_USER} vncpasswd [/white on black]")
+    console.print(f"- [key] Samba Password:[/key] Set Samba password: [white on black] sudo smbpasswd -a {DEBIAN_USER} [/white on black]")
+    console.print(f"- [network] ZeroTier Auth:[/network] Authorize device in ZeroTier Central for network [cyan]{ZT_NETWORK_ID}[/cyan]")
+    
+    # New Docker & Containerization Features
+    console.print("\n[bold cyan]🐳 Docker & Containerization:[/bold cyan]")
+    console.print(f"- [docker] Docker Status:[/docker] [white on black] sudo systemctl status docker [/white on black]")
+    console.print(f"- [docker] Test Docker:[/docker] [white on black] sudo -u {DEBIAN_USER} docker run hello-world [/white on black]")
+    console.print(f"- [docker] Test x86 Emulation:[/docker] [white on black] sudo -u {DEBIAN_USER} docker run --platform linux/amd64 hello-world [/white on black]")
+    console.print(f"- [docker] Multi-arch Build:[/docker] [white on black] docker buildx create --use [/white on black]")
+    console.print(f"- [storage] Podman Rootless:[/storage] Config: [cyan]{rootless_storage_conf_file}[/cyan]")
+    console.print(f"- [storage] Podman Rootful:[/storage] Config: [cyan]{rootful_storage_conf_file}[/cyan]")
+    console.print(f"    Use: [white on black] sudo podman --storage-config={rootful_storage_conf_file} --runroot={rootful_runroot} ... [/white on black]")
+    
+    # Enhanced Network Sharing
+    console.print("\n[bold cyan]🌐 Enhanced Network Sharing:[/bold cyan]")
+    console.print(f"- [network] Samba Shares Available:[/network]")
+    console.print(f"    • [cyan]RootFS[/cyan] - Root filesystem (read-only, secure)")
+    console.print(f"    • [cyan]RootFS-RW[/cyan] - Root filesystem (read-write, [bold red]DANGEROUS![/bold red])")
+    console.print(f"    • [cyan]Homes[/cyan] - User home directories")
+    console.print(f"    • [cyan]{SAMBA_SHARE_NAME}[/cyan] - Data volume")
+    console.print(f"- [network] Access Shares:[/network] [white on black] \\\\\\\\<server-ip>\\\\RootFS [/white on black] (Windows) or [white on black] smb://<server-ip>/RootFS [/white on black] (Linux)")
+    
+    # Package Management & Tools
+    console.print("\n[bold cyan]📦 Package Management & Tools:[/bold cyan]")
+    console.print(f"- [package] Tasksel:[/package] [white on black] sudo tasksel [/white on black] (task-based package selection)")
+    console.print(f"- [package] Aptitude:[/package] [white on black] sudo aptitude [/white on black] (advanced package manager)")
+    console.print(f"- [package] Search Files:[/package] [white on black] apt-file search <filename> [/white on black]")
+    console.print(f"- [package] Find Orphans:[/package] [white on black] deborphan [/white on black]")
+    
+    # Shell & User Experience
+    console.print("\n[bold cyan]🚀 Shell & User Experience:[/bold cyan]")
+    console.print(f"- [shell] Starship Prompt:[/shell] Config at [cyan]{starship_config}[/cyan]")
+    console.print(f"- [shell] Enhanced Aliases:[/shell] Available in .bashrc (ll, la, dps, di, sysinfo, etc.)")
+    console.print(f"- [shell] System Info:[/shell] [white on black] {sysinfo_script} [/white on black] or [white on black] neofetch [/white on black]")
+    
+    # Services & System Management
+    console.print("\n[bold cyan]⚙️ Services & System Management:[/bold cyan]")
+    console.print(f"- [desktop] VNC Service:[/desktop] [white on black] sudo systemctl start vncserver@{VNC_DISPLAY_NUM}.service [/white on black]")
+    console.print(f"- [desktop] VNC Connect:[/desktop] VNC client to [cyan]<server-ip>:590{VNC_DISPLAY_NUM}[/cyan]")
+    console.print(f"- [storage] LVM Volume:[/storage] Mounted at [cyan]{LVM_MOUNT_POINT}[/cyan] - [white on black] df -h {LVM_MOUNT_POINT} [/white on black]")
+    console.print(f"- [system] Service Status:[/system] [white on black] systemctl status ssh smbd docker [/white on black]")
+    
+    # Security & Access
+    console.print("\n[bold cyan]🔒 Security & Access:[/bold cyan]")
+    console.print(f"- [security] SSH Config:[/security] Enhanced security in [cyan]/etc/ssh/sshd_config[/cyan]")
+    console.print(f"- [security] VNC Security:[/security] Password-protected, localhost disabled for network access")
+    console.print(f"- [security] Samba Security:[/security] User authentication required, private network access")
+    console.print(f"- [security] Firewall:[/security] Consider configuring [white on black] ufw [/white on black] for additional security")
+    
+    # Architecture & Emulation
+    console.print("\n[bold cyan]🏗️ Architecture & Emulation:[/bold cyan]")
+    console.print(f"- [arch] Native:[/arch] ARM64/aarch64 architecture")
+    console.print(f"- [arch] x86 Emulation:[/arch] QEMU user static + binfmt support enabled")
+    console.print(f"- [arch] Test Emulation:[/arch] [white on black] file /usr/bin/qemu-x86_64-static [/white on black]")
+    console.print(f"- [arch] Verify Formats:[/arch] [white on black] update-binfmts --display [/white on black]")
+    
+    # Final Recommendations
+    console.print("\n[bold cyan]🎯 Final Recommendations:[/bold cyan]")
+    console.print("- [system] Reboot:[/system] [bold]Recommended[/bold] to ensure all services start correctly: [white on black] sudo reboot [/white on black]")
+    console.print(f"- [backup] Backup:[/backup] Consider backing up [cyan]/home/{DEBIAN_USER}[/cyan] and [cyan]/etc[/cyan] directories")
+    console.print(f"- [monitoring] Monitoring:[/monitoring] Use [white on black] htop [/white on black], [white on black] docker stats [/white on black], [white on black] systemctl status [/white on black]")
+    console.print(f"- [log] Logs:[/log] Installation logs: [dim]{LOG_FILENAME}[/dim]")
+    
+    console.print(Rule())
+    console.print("[bold green]🎉 Installation completed successfully! Your Debian ARM64 system is now fully enhanced with:")
+    console.print("   • Docker CE with x86 emulation support")
+    console.print("   • Enhanced Samba sharing (including root filesystem)")
+    console.print("   • Advanced package management tools")
+    console.print("   • Starship cross-shell prompt")
+    console.print("   • Enhanced SSH and VNC configurations")
+    console.print("   • Comprehensive system optimizations")
+    console.print("[/bold green]")
     console.print(Rule())
 
     sys.exit(0)
